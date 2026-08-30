@@ -1,0 +1,9 @@
+{
+  "name": "@aglib-recipe/personal-agent",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "aglib": "file:../..",
+    "zod": "^4.4.3"
+  }
+}

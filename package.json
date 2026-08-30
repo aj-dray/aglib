@@ -1,0 +1,116 @@
+{
+  "name": "aglib",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A small TypeScript toolkit for building your own agent harness.",
+  "license": "MIT",
+  "author": "Adam Dray",
+  "packageManager": "bun@1.3.14",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./session": {
+      "types": "./dist/session/index.d.ts",
+      "import": "./dist/session/index.js"
+    },
+    "./tools": {
+      "types": "./dist/tools/index.d.ts",
+      "import": "./dist/tools/index.js"
+    },
+    "./model": {
+      "types": "./dist/model/index.d.ts",
+      "import": "./dist/model/index.js"
+    },
+    "./model/conformance": {
+      "types": "./dist/model/conformance.d.ts",
+      "import": "./dist/model/conformance.js"
+    },
+    "./model/adapters/anthropic": {
+      "types": "./dist/model/adapters/anthropic/index.d.ts",
+      "import": "./dist/model/adapters/anthropic/index.js"
+    },
+    "./model/adapters/openai-compatible": {
+      "types": "./dist/model/adapters/openai-compatible/index.d.ts",
+      "import": "./dist/model/adapters/openai-compatible/index.js"
+    },
+    "./model/adapters/fake": {
+      "types": "./dist/model/adapters/fake/index.d.ts",
+      "import": "./dist/model/adapters/fake/index.js"
+    },
+    "./store": {
+      "types": "./dist/store/index.d.ts",
+      "import": "./dist/store/index.js"
+    },
+    "./store/conformance": {
+      "types": "./dist/store/conformance.d.ts",
+      "import": "./dist/store/conformance.js"
+    },
+    "./store/adapters/sqlite": {
+      "types": "./dist/store/adapters/sqlite.d.ts",
+      "import": "./dist/store/adapters/sqlite.js"
+    },
+    "./harness": {
+      "types": "./dist/harness/index.d.ts",
+      "import": "./dist/harness/index.js"
+    },
+    "./harness/adapters/acp": {
+      "types": "./dist/harness/adapters/acp/index.d.ts",
+      "import": "./dist/harness/adapters/acp/index.js"
+    },
+    "./sandbox": {
+      "types": "./dist/sandbox/index.d.ts",
+      "import": "./dist/sandbox/index.js"
+    },
+    "./sandbox/conformance": {
+      "types": "./dist/sandbox/conformance.d.ts",
+      "import": "./dist/sandbox/conformance.js"
+    },
+    "./sandbox/adapters/local": {
+      "types": "./dist/sandbox/adapters/local.d.ts",
+      "import": "./dist/sandbox/adapters/local.js"
+    },
+    "./sandbox/adapters/docker": {
+      "types": "./dist/sandbox/adapters/docker.d.ts",
+      "import": "./dist/sandbox/adapters/docker.js"
+    }
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14",
+    "typescript": "^6.0.3"
+  },
+  "workspaces": [
+    "recipes/*"
+  ],
+  "scripts": {
+    "build": "bun scripts/build.ts",
+    "prepare": "bun run build",
+    "check": "bun run typecheck && bun test src scripts && bun run build && bun run node:verify && bun run recipes:verify && bun run docs:check && bun scripts/checks.ts",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.scripts.json",
+    "test": "bun run build && bun test src scripts recipes",
+    "checks": "bun run build && bun scripts/checks.ts",
+    "recipes:verify": "tsc -p tsconfig.recipes.json && bun test recipes",
+    "recipe": "bun run build && bun scripts/recipe.ts",
+    "docs": "bun scripts/docs.ts",
+    "docs:check": "bun scripts/docs.ts --check",
+    "node:verify": "node scripts/node-verify.mjs",
+    "prepack": "bun run build"
+  }
+}

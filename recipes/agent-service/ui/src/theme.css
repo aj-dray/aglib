@@ -1,0 +1,13 @@
+/*
+ * Tailwind's theme layer, emitted whole.
+ *
+ * assistant-ui's stylesheet is a Tailwind v4 artifact whose every measurement
+ * reads a theme variable — `--spacing`, `--text-sm`, `--radius-3xl`. Tailwind
+ * normally emits only the variables its generated utilities reference, and
+ * this app generates none, so the theme came out empty and every rule in that
+ * stylesheet was dropped as invalid. `theme(static)` emits them regardless.
+ *
+ * Only the theme: assistant-ui scopes its own reset to `.aui-thread-root`, and
+ * Tailwind's global preflight would flatten the chrome around it.
+ */
+@import "tailwindcss/theme.css" layer(theme) theme(static);
