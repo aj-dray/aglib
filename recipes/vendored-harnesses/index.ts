@@ -6,15 +6,15 @@
  * recipe makes is that "use their agent" and "own the session" are not a
  * trade: pick a harness, and what changes is which control points you keep.
  *
- * | harness | tools | prompt | resume |
- * | --- | --- | --- | --- |
- * | `claude-code` | its own, or ours through an in-process MCP server | its preset with ours appended | none — the agent owns its context |
- * | `pi` | ours, through the executor | ours | from the log |
+ * | harness | their tools | ours | prompt | resume |
+ * | --- | --- | --- | --- | --- |
+ * | `claude-code` | by name, inside its process | an in-process MCP server | its preset with ours appended | none |
+ * | `pi` | as values, re-pointed at our sandbox | the same executor | ours | from the log |
  *
  * `acp-switcher` is the other end of the same argument: any agent in the
  * registry, cheaply, keeping none of that.
  */
-import { runAgent, textOf, type Agent } from "aglib";
+import { runAgent, type Agent } from "aglib";
 import { createSqliteStore } from "aglib/store/adapters/sqlite";
 import { createOpenAiCompatibleModel, createOpenRouterModel } from "aglib/model/adapters/openai-compatible";
 import { createAnthropicModel } from "aglib/model/adapters/anthropic";
@@ -28,13 +28,14 @@ import { serveAnthropicWire } from "./wire.ts";
 import { createClaudeCodeHarness } from "./claude-code.ts";
 import { createPiHarness } from "./pi.ts";
 import { sandboxTools } from "./tools.ts";
+import { piCodingTools } from "./pi-tools.ts";
 
 export const harnessIds = ["claude-code", "pi"] as const;
 export type HarnessId = (typeof harnessIds)[number];
 
 export interface Choice {
   harness: HarnessId;
-  hands: "own" | "sandbox";
+  tools: "ours" | "theirs" | "both";
   sandbox: "local" | "docker";
   provider: "openrouter" | "openai" | "anthropic";
   model: string;
@@ -43,7 +44,7 @@ export interface Choice {
 
 export const defaultChoice: Choice = {
   harness: "claude-code",
-  hands: "sandbox",
+  tools: "ours",
   sandbox: "local",
   provider: "openrouter",
   model: "anthropic/claude-sonnet-5",
@@ -62,7 +63,7 @@ export function createChosenModel(choice: Choice): Model {
   if (choice.provider === "openai") {
     return createOpenAiCompatibleModel({ apiKey, baseUrl: "https://api.openai.com/v1", model: choice.model });
   }
-  return createOpenRouterModel({ apiKey, model: choice.model, appName: "aglib-sdk-harness" });
+  return createOpenRouterModel({ apiKey, model: choice.model, appName: "aglib-vendored-harnesses" });
 }
 
 async function openSandbox(kind: Choice["sandbox"]): Promise<Sandbox> {
@@ -92,20 +93,24 @@ export async function main(
   const instructions = "You are a careful assistant working inside a sandbox. Be brief and say what you did.";
   const agent: Agent = choice.harness === "pi"
     ? {
-        id: "sdk-harness", version: "1", instructions,
+        id: "vendored-harnesses", version: "1", instructions,
         harness: createPiHarness({
           baseUrl: wire.url, token: wire.token,
           ...(choice.effort ? { effort: choice.effort } : {}),
         }),
-        // Pi runs our tools through the executor, which is what lets it claim
-        // `toolUse: "application"`.
-        tools: sandboxTools(sandbox),
+        // Every tool goes through the executor, theirs included: `pi-tools.ts`
+        // adapts Pi's own bash, read, edit and write and backs them with the
+        // sandbox, so they are validated and gated like anything we wrote.
+        tools: [
+          ...(choice.tools === "ours" ? [] : piCodingTools(sandbox)),
+          ...(choice.tools === "theirs" ? [] : sandboxTools(sandbox)),
+        ],
       }
     : {
-        id: "sdk-harness", version: "1", instructions,
+        id: "vendored-harnesses", version: "1", instructions,
         harness: createClaudeCodeHarness({
           sandbox,
-          hands: choice.hands,
+          tools: choice.tools,
           ...(choice.effort ? { effort: choice.effort } : {}),
           env: {
             ...process.env as Record<string, string>,
@@ -125,6 +130,8 @@ export async function main(
   const store = createSqliteStore({ database });
   const sessionId = crypto.randomUUID();
   const run = runAgent({ agent, store, sessionId, key: "me", input: task });
+  // The stream is the output. Printing `result.output` afterwards said
+  // everything twice — one answer, arriving in two ways.
   for await (const update of run) if (update.type === "text.delta") write(update.text);
   write("\n");
 
@@ -135,11 +142,10 @@ export async function main(
   if (result.status !== "completed") {
     throw new Error(result.status === "failed" ? `run failed: ${result.error.message}` : `run ${result.status}`);
   }
-  write(`${textOf(result.output)}\n`);
   return sessionId;
 }
 
-/** `--harness pi --hands sandbox --sandbox docker` — everything else is the task. */
+/** `--harness pi --tools both --sandbox docker` — everything else is the task. */
 export function parseArguments(argv: readonly string[]): { choice: Choice; task: string } {
   const flags = new Map<string, string>();
   const words: string[] = [];
@@ -157,7 +163,7 @@ export function parseArguments(argv: readonly string[]): { choice: Choice; task:
     choice: {
       ...defaultChoice,
       harness,
-      hands: (flags.get("hands") ?? defaultChoice.hands) as Choice["hands"],
+      tools: (flags.get("tools") ?? defaultChoice.tools) as Choice["tools"],
       sandbox: (flags.get("sandbox") ?? defaultChoice.sandbox) as Choice["sandbox"],
       provider: (flags.get("provider") ?? defaultChoice.provider) as Choice["provider"],
       model: flags.get("model") || defaultChoice.model,
@@ -169,7 +175,7 @@ export function parseArguments(argv: readonly string[]): { choice: Choice; task:
 
 if (import.meta.main) {
   const { choice, task } = parseArguments(process.argv.slice(2));
-  console.error(`· ${choice.harness} · hands ${choice.hands} · sandbox ${choice.sandbox} · ${choice.provider} · ${choice.model}`);
+  console.error(`· ${choice.harness} · tools ${choice.tools} · sandbox ${choice.sandbox} · ${choice.provider} · ${choice.model}`);
   await main(task, { choice });
-  console.log(recipeMarker("sdk-harness"));
+  console.log(recipeMarker("vendored-harnesses"));
 }

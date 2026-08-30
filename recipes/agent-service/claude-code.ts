@@ -81,7 +81,6 @@ export function createClaudeCodeHarness(options: ClaudeCodeHarnessOptions): Harn
     id: "claude-code",
     // Its tools are its own: we choose which exist and decide each call, but we
     // never validated arguments against a schema we wrote.
-    toolUse: "harness",
     recovery: "none",
     run: (context) => runTurn(options, context),
   };

@@ -100,7 +100,6 @@ export function createAcpHarness(options: AcpHarnessOptions): Harness {
     id: options.id,
     // Its tools are its own. We gate them and we record them; we do not claim
     // to have validated arguments we never had a schema for.
-    toolUse: "harness",
     // The agent owns its context. Our entries describe what it did, and cannot
     // by themselves put it back mid-turn.
     recovery: "none",
