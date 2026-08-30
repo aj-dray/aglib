@@ -26,7 +26,7 @@ export const sandboxKinds = ["local", "docker"] as const;
 export type SandboxKind = (typeof sandboxKinds)[number];
 
 /** The image a container is made from. Small, and has a shell. */
-export const dockerImage = "alpine:3.22";
+export const dockerImage = process.env["AGLIB_DOCKER_IMAGE"] ?? "alpine:3";
 
 export async function openSandbox(kind: SandboxKind): Promise<Sandbox> {
   const provider = kind === "docker"
