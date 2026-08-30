@@ -103,7 +103,9 @@ A run is an `AsyncIterable` of ephemeral updates with a `result` promise. Commit
 sequence number; deltas do not and are never recovery state.
 
 That single pair — **entries with a cursor, deltas without** — is what every outward surface is
-built from. A CLI prints deltas. An HTTP API streams entries after `?after=N`. A web UI resumes
+built from, and `render` is the package's own answer for one medium: the fold from that pair to
+lines a person reads, so the three recipes share one instead of writing three that drift. A CLI
+prints deltas. An HTTP API streams entries after `?after=N`. A web UI resumes
 from its last sequence number after a reconnect and may have missed provisional text, never
 committed content. A Slack or email bridge translates at the edge. None of them invents a second
 protocol, and only their ability to resume differs.

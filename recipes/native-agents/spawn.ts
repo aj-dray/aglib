@@ -19,7 +19,8 @@
  * if it has already ended. Parent and child are the same kind of thing talking
  * over the same channel; nothing here is a special case for parenthood.
  */
-import { defineTool, runAgent, textOf, type Agent, type Tool } from "aglib";
+import { defineTool, runAgent, type Agent, type Tool } from "aglib";
+import { renderRun, type Sink } from "aglib/render";
 import type { Delivery, Runnable, Store } from "aglib/store";
 import { z } from "zod";
 
@@ -96,7 +97,8 @@ export async function drain(input: {
   store: Store;
   agentFor(claim: Runnable): Agent;
   signal?: AbortSignal;
-  onOutput?(sessionId: string, output: string): void;
+  /** Where a drained run is shown. Each is labelled, because none of it was asked for here. */
+  sink?: Sink;
 }): Promise<void> {
   for (;;) {
     if (input.signal?.aborted) return;
@@ -110,8 +112,13 @@ export async function drain(input: {
       claim: claimed.value,
       ...(input.signal ? { signal: input.signal } : {}),
     });
-    for await (const _ of run) { /* the log is the record; nothing to show here */ }
-    const result = await run.result;
-    if (result.status === "completed") input.onOutput?.(claimed.value.sessionId, textOf(result.output));
+    // Rendered rather than summarised at the end: a subagent that takes a
+    // minute was previously a minute of silence followed by a paragraph.
+    if (input.sink) {
+      await renderRun(run, { ...input.sink, label: `[${claimed.value.sessionId.slice(0, 4)}]` });
+    } else {
+      for await (const _ of run) { /* nothing is watching */ }
+      await run.result;
+    }
   }
 }
