@@ -7,8 +7,5 @@
   },
   "include": [
     "recipes"
-  ],
-  "exclude": [
-    "recipes/*/ui"
   ]
 }
