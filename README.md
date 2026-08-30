@@ -125,6 +125,7 @@ specification: anything with no call site in one of them should not exist.
 | Recipe | What it proves |
 | --- | --- |
 | [`recipes/native-agent`](recipes/native-agent/README.md) | The log, memory and skills on the host, one `bash`, subagents through the queue, and a sandbox you choose. |
+| [`recipes/sdk-harness`](recipes/sdk-harness/README.md) | A vendor library wrapped as a harness — Claude Code and Pi — inside our log, our sandbox and our model port. |
 | [`recipes/personal-agent`](recipes/personal-agent/README.md) | The log, compaction, context lifetimes, tools, session search. Memory built entirely *on* the library, not in it. |
 | [`recipes/agent-service`](recipes/agent-service/README.md) | The queue, atomic cross-session handoff, a harness per session, a sandbox per session, live views. |
 
