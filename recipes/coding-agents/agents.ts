@@ -25,7 +25,15 @@ export interface AcpAgentRow {
   command: readonly string[];
   /** The agent's own mode. On Claude, "default" means "ask before acting". */
   mode?: string;
-  /** Environment the agent needs to find its provider. Names, not values. */
+  /**
+   * Environment the agent needs to find its provider. Names, not values.
+   *
+   * Names rather than a credential type, because where an agent's requests go
+   * is the operator's decision and not this table's. Point `ANTHROPIC_BASE_URL`
+   * at `serveAnthropicWire` and this agent runs on whatever `Model` is behind
+   * the port, exactly as the two in `vendored-agents` do — without this recipe
+   * having to know that is what happened.
+   */
   credential?: readonly string[];
   /** Why this cannot be started here. */
   unavailable?: string;
@@ -40,14 +48,14 @@ export const acpAgents: readonly AcpAgentRow[] = [
       + "Its tools cannot be removed, so the whole process is contained rather than its hands.",
     command: ["npx", "-y", "@agentclientprotocol/claude-agent-acp@0.70.0"],
     mode: "default",
-    credential: ["ANTHROPIC_API_KEY"],
+    credential: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL"],
   },
   {
     id: "codex",
     title: "Codex",
     summary: "Codex on a ChatGPT subscription. It ships nothing equivalent to an embeddable agent library, so this is the route.",
     command: ["npx", "-y", "@agentclientprotocol/codex-acp@1.6.2"],
-    credential: ["OPENAI_API_KEY"],
+    credential: ["OPENAI_API_KEY", "OPENAI_BASE_URL"],
   },
   {
     id: "opencode",
