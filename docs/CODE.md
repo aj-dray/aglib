@@ -14,7 +14,7 @@ src/
   store/      the store port, its adapters, and the suite they answer
   sandbox/    the containment port, its adapters, and the suite they answer
   harness/    the harness port and its adapters, our own loop among them
-recipes/      the two applications that define the scope
+recipes/      the three applications that define the scope, one per answer to whose loop runs
 ```
 
 A port with more than one implementation ships `conformance.ts` beside it: an inert list of named

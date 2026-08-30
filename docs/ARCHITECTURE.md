@@ -184,7 +184,7 @@ A `Delivery` carries four things beyond its content:
 
 That is a change from `now | next | later`, and the reason is worth keeping. `now` meant *either* of the first two depending on the harness: fold if it had a safe point, end the activation if it did not. One word for "your message arrives and the work continues" and "your message arrives and a turn's work is destroyed". The defence was that a priority names the requirement rather than the mechanism — but those are not two mechanisms serving one requirement, they are two different things happening to somebody's work, and the giveaway was that a runtime answer had to be invented to tell the sender which one it got. `later` named a fourth thing nothing implemented.
 
-**A harness that cannot reach a place falls back to a later one, never an earlier one.** A loop with no safe point cannot do `turn`, so a `turn` delivery waits for the next activation. It is not promoted to ending the activation, which is what falling back through an ordered scale did: ask for the gentlest useful thing and be given the most destructive one. `agent-service` still answers `{ readAt }`, but it now reports a degradation — "I could not reach that place, so it waits" — rather than which of two very different things happened.
+**A harness that cannot reach a place falls back to a later one, never an earlier one.** A loop with no safe point cannot do `turn`, so a `turn` delivery waits for the next activation. It is not promoted to ending the activation, which is what falling back through an ordered scale did: ask for the gentlest useful thing and be given the most destructive one. An application answering a sender now reports a degradation — "I could not reach that place, so it waits" — rather than which of two very different things happened.
 
 **What the library does and does not do.** It records the place, delivers atomically, reports what is waiting, and drops a duplicate `id`. That last one has to outlive the queue, because the common case is a duplicate arriving after the first copy was read — so a store remembers an id for a window an application sets and can reason about, and the conformance suite holds it to that. It does not end a running activation: only the application knows where that run is.
 
@@ -217,9 +217,9 @@ They exist because the ports have several implementations each and the differenc
 not show up in a type. The store's two mechanisms are the clearest case: `expectedSeq` and the claim
 do different jobs, one does not imply the other, and getting it subtly wrong produces a log a
 provider will not accept rather than a rejected write. Prose said so, in this document, and prose
-does not fail — the Postgres store in `agent-service` renewed its claim when a run started instead
-of on every write it made, exactly the defect described above, and shipped that way until the suite
-was pointed at it. The sandbox suite found three more in a hosted provider: paths were not confined
+does not fail — a Postgres store written outside this package from the interface alone renewed its
+claim when a run started instead of on every write it made, exactly the defect described above, and
+shipped that way until the suite was pointed at it. The sandbox suite found three more in a hosted provider: paths were not confined
 to the root, closing twice reported a refusal to release, and one combined output stream was
 reported as two.
 
@@ -249,14 +249,15 @@ The local sandbox runs with the host user's authority and is not isolation — a
 answers that request in the package: a container per sandbox from the local daemon, no account and
 no vendor SDK, so the isolation the port describes is something a caller can have and a test can
 check rather than a promise deferred to whatever they write themselves. A hosted box is still an
-application's adapter — `agent-service` has one — because it needs a vendor dependency.
+application's adapter, because it needs a vendor dependency; `sandbox/conformance` is what holds
+it to the same contract as the two here.
 
 Where a credential is held follows where the agent runs, and the port makes that answerable rather
 than assumed. A `Secret` is handed to `create`, and the sandbox reports `"substituted"` or
 `"plain"`: neither the local provider nor the Docker one can keep a value out of a process it
-starts, and both say so. `agent-service`'s hosted adapter stores the secret with the vendor and
-mounts a reference, so the box is given `dtn_secret_<id>` and the value is substituted at egress for
-the hosts that credential declared. Its own harnesses split on the same fact — the SDK harness runs
+starts, and both say so. A hosted adapter that stores the secret with its vendor and mounts a
+reference gives the box an opaque handle, and the value is substituted at egress for the hosts that
+credential declared. Harnesses split on the same fact — the SDK harness runs
 Claude Code in the service's process and so holds the credential there, and the protocol harness
 starts its agent inside the box and does not.
 

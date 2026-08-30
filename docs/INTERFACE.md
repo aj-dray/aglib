@@ -4,7 +4,7 @@ Everything an application touches: the SDK, and the shapes a CLI, HTTP API or UI
 
 ## The SDK
 
-The first useful agent fits on one screen — [`recipes/personal-agent`](../recipes/personal-agent/README.md)
+The first useful agent fits on one screen — [`recipes/native-agents`](../recipes/native-agents/README.md)
 is a real one. Imports perform no I/O. Defaults open no connection, database, process or sandbox.
 Every stateful dependency is passed in.
 
@@ -36,7 +36,7 @@ A run answers with `usage` on every outcome, because a run that burned a thousan
 response — because that is an observation like the counts beside it, and no table an application
 keeps could reconstruct it for a router that picks its upstream per request.
 
-**A rate table is not here, and neither is a ceiling.** The counts are the fact; the rates that turn them into money move faster than a release and belong to the deployment. A spend limit would have to read those rates, which means taking a function from the caller and then defending against it — and what to do when a run gets expensive is policy besides: the two applications that wanted a ceiling wanted it to stop at different moments. `agent-service` prices its own log and says so in one line.
+**A rate table is not here, and neither is a ceiling.** The counts are the fact; the rates that turn them into money move faster than a release and belong to the deployment. A spend limit would have to read those rates, which means taking a function from the caller and then defending against it — and what to do when a run gets expensive is policy besides: the two applications that wanted a ceiling wanted it to stop at different moments. An application prices its own log, from a table it holds, in one line.
 
 ## Sending, and running what was claimed
 
@@ -123,7 +123,7 @@ await store.append({
 - **`turn`** — folded into the activation already running, before its next model call. Nothing in flight is lost. Immediately, if nothing is running.
 - **`next`** — at the start of the recipient's next activation. The default.
 
-Three places, each one thing. A harness that cannot reach one falls back to a **later** place, never an earlier one: a loop with no safe point mid-turn cannot do `turn`, so the message waits rather than the activation being ended instead. `agent-service` answers `{ readAt }` so a sender learns when a place could not be reached.
+Three places, each one thing. A harness that cannot reach one falls back to a **later** place, never an earlier one: a loop with no safe point mid-turn cannot do `turn`, so the message waits rather than the activation being ended instead. An application answering a sender tells it which place was reached, so "later than you asked" is visible rather than silent.
 
 Input carries `from` onto the recipient's `run.started` — `{ kind, id }`, naming what sort of sender it was and which one. aglib mints exactly one kind, `"session"`; a person, a channel, a schedule and a webhook are the application's words, because only the application can close that list. The projection names it in the turn itself, so a recipient can tell a person typing from a peer agent from a routine firing, and can see that it has already answered one that arrived twice.
 
@@ -131,7 +131,8 @@ Input carries `from` onto the recipient's `run.started` — `{ kind, id }`, nami
 
 A sandbox is requested, not described. `isolation: "required"` is either enforced or refused: the
 local provider runs with the host's authority and says no, the Docker provider hands back a
-container, and a hosted provider is an adapter an application writes — `agent-service` has one.
+container, and a hosted provider is an adapter an application writes, held to `sandbox/conformance`
+like the two here.
 The outbound posture is stated at creation and never defaulted, and a provider that cannot enforce
 the one it was given refuses before anything is provisioned.
 
@@ -140,7 +141,8 @@ with what became of it: `"substituted"` means the box holds a reference and the 
 egress, to the hosts that secret named — the agent can spend the credential and cannot read it.
 `"plain"` means the value is in the environment, where anything running there can read it, and a
 caller handing a long-lived token to code it did not write can decline on that answer. The local and
-Docker providers say `"plain"`; `agent-service`'s hosted adapter substitutes. Plain configuration
+Docker providers say `"plain"`; a hosted provider that keeps the value out of the box
+substitutes. Plain configuration
 goes in `env`, which is set for everything the box starts and is meant to be readable.
 
 `aglib/sandbox/conformance` and `aglib/store/conformance` are how a new adapter finds out whether it
