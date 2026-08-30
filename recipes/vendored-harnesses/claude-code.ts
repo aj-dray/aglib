@@ -36,6 +36,15 @@ import { textOf } from "aglib";
 import type { Sandbox } from "aglib/sandbox";
 import { sandboxToolDefinitions, type ToolDefinition } from "./tools.ts";
 
+/**
+ * The built-in tools "theirs" keeps.
+ *
+ * Named rather than taken wholesale: this is the set that edits and searches
+ * files, which is what a coding agent is worth reusing for. `Task` is left out
+ * deliberately — a subagent it spawns is one this log never sees.
+ */
+const builtIns = ["Bash", "Read", "Edit", "Write", "Glob", "Grep"] as const;
+
 /** Its thinking budget, by our three levels. */
 const budgets: Readonly<Record<"low" | "medium" | "high", number>> = { low: 2048, medium: 8192, high: 24576 };
 
@@ -45,18 +54,26 @@ type Block = { type: string; [key: string]: unknown };
 export interface ClaudeCodeOptions {
   sandbox: Sandbox;
   /**
-   * Whose hands the agent uses.
+   * Whose tools the agent gets, and it may be both.
    *
-   * "own" leaves Claude Code's Read, Write, Edit and Bash in place. They run in
-   * this process, so they reach the machine this runs on — which is the sandbox
-   * only when the sandbox is a directory on that same machine.
+   * "ours" takes every built-in away — `tools: []` is default-deny, so one
+   * added by a future version cannot quietly reach this machine — and gives
+   * back `bash`, `read_file` and `write_file` through the sandbox port. The
+   * process still runs here; its hands do not.
    *
-   * "sandbox" takes every built-in away and gives back `bash`, `read_file` and
-   * `write_file` backed by the port. The process still runs here; its hands do
-   * not. That is the containment this library is for, and it is why an agent
-   * whose tools cannot be removed has to be started inside the box instead.
+   * "theirs" leaves Read, Write, Edit and Bash in place. They are *inside* the
+   * agent, not values we can take, so they run in this process and reach this
+   * machine. Unlike Pi's, they cannot be re-pointed at a sandbox.
+   *
+   * "both" is the interesting one and the reason this is not a boolean: keep
+   * their editing tools, which are good, and add ours beside them — a memory,
+   * a delegation, whatever this application is actually for.
+   *
+   * Anything but "ours" therefore requires a sandbox that *is* this machine.
+   * Asking for a container while their tools are in place would be calling
+   * something contained that is not.
    */
-  hands: "own" | "sandbox";
+  tools: "ours" | "theirs" | "both";
   model?: string;
   effort?: "low" | "medium" | "high";
   /** Applied to Claude's own tools, per call, with the real name and parsed input. */
@@ -68,9 +85,6 @@ export interface ClaudeCodeOptions {
 export function createClaudeCodeHarness(options: ClaudeCodeOptions): Harness {
   return {
     id: "claude-code",
-    // Its tools are its own: we choose which exist and decide each call, but we
-    // never validated arguments against a schema we wrote.
-    toolUse: "harness",
     // The agent owns its context. Our entries describe what it did and cannot
     // by themselves put it back mid-turn.
     recovery: "none",
@@ -81,14 +95,14 @@ export function createClaudeCodeHarness(options: ClaudeCodeOptions): Harness {
 async function runTurn(options: ClaudeCodeOptions, context: HarnessContext): Promise<HarnessResult> {
   // Keeping its own tools while the sandbox is elsewhere would put its hands on
   // this machine and call it contained. Refused rather than run.
-  if (options.hands === "own" && options.sandbox.isolation !== "none") {
+  if (options.tools !== "ours" && options.sandbox.isolation !== "none") {
     return {
       status: "failed",
       error: {
         code: "unsupported",
         message:
           "This harness runs in our own process, so its built-in tools reach this machine, not the "
-          + `${options.sandbox.isolation}. Use hands: "sandbox" to replace them with sandbox-backed tools.`,
+          + `${options.sandbox.isolation}. Use tools: "ours" to replace them with sandbox-backed ones.`,
         retryable: false,
       },
     };
@@ -136,13 +150,13 @@ async function runTurn(options: ClaudeCodeOptions, context: HarnessContext): Pro
 }
 
 function optionsFor(options: ClaudeCodeOptions, context: HarnessContext): Options {
-  const contained = options.hands === "sandbox";
-  const ours: readonly ToolDefinition[] = contained ? sandboxToolDefinitions(options.sandbox) : [];
+  const theirs = options.tools !== "ours";
+  const ours: readonly ToolDefinition[] = options.tools === "theirs" ? [] : sandboxToolDefinitions(options.sandbox);
 
   return {
     // Where the process sits. With sandbox hands nothing of the agent's reads
     // it, because it has no tool that can.
-    cwd: contained ? process.cwd() : options.sandbox.root,
+    cwd: theirs ? options.sandbox.root : process.cwd(),
 
     // Its own prompt with ours after it. This harness *is* Claude Code, so
     // replacing that prompt would make the name a lie; a bare one is a
@@ -155,19 +169,20 @@ function optionsFor(options: ClaudeCodeOptions, context: HarnessContext): Option
     settingSources: [],
     strictMcpConfig: true,
 
-    // With sandbox hands every built-in goes: `tools: []` is default-deny, so a
-    // tool added by a future version cannot quietly reach this machine.
-    // Otherwise only the subagent tool goes — removed from the model's context
-    // rather than refused after the fact, so it never sees an option it cannot
-    // take.
-    ...(contained ? { tools: [] } : { disallowedTools: ["Task"] }),
+    // Without their tools, `tools: []` is default-deny, so one added by a
+    // future version cannot quietly reach this machine. With them, only the
+    // subagent tool goes — removed from the model's context rather than refused
+    // after the fact, so it never sees an option it cannot take.
+    ...(theirs ? { disallowedTools: ["Task"] } : { tools: [] }),
 
-    // Ours are allowed by name. `tools: []` removes the built-ins but leaves an
-    // MCP tool needing approval, and the approval it waits for is a prompt
-    // nobody is at — so the model is told it may not use the only hands it has.
-    // Naming them here is not a weaker gate: `decide` still runs per call, and
-    // these are tools we wrote, against schemas we wrote.
-    ...(ours.length ? { allowedTools: ours.map((definition) => `mcp__sandbox__${definition.name}`) } : {}),
+    // Everything it may use, named. Left unset, an MCP tool waits on an
+    // approval prompt nobody is at, and the model is told it may not use the
+    // only hands it has. Naming them is not a weaker gate: `decide` still runs
+    // per call, and it runs on their tools too.
+    allowedTools: [
+      ...(theirs ? builtIns : []),
+      ...ours.map((definition) => `mcp__sandbox__${definition.name}`),
+    ],
 
     ...(ours.length
       ? {

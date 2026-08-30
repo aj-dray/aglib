@@ -66,7 +66,7 @@ const liveTest = live ? test : test.skip;
 liveTest("the Claude Agent SDK runs on a model behind the port", async () => {
   const { query } = await import("@anthropic-ai/claude-agent-sdk");
   const wire = serveAnthropicWire({
-    model: createOpenRouterModel({ apiKey: live!, model: "anthropic/claude-sonnet-5", appName: "aglib-sdk-harness" }),
+    model: createOpenRouterModel({ apiKey: live!, model: "anthropic/claude-sonnet-5", appName: "aglib-vendored-harnesses" }),
   });
 
   const said: string[] = [];

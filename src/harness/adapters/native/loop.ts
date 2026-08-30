@@ -30,7 +30,6 @@ export interface NativeHarnessOptions {
 export function createNativeHarness(options: NativeHarnessOptions): Harness {
   return {
     id: "native",
-    toolUse: "application",
     recovery: "history",
 
     async run(context: HarnessContext): Promise<HarnessResult> {

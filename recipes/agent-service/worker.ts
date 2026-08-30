@@ -150,7 +150,14 @@ export async function work(input: {
             version: "1",
             instructions,
             harness: built.harness,
-            tools: built.harness.toolUse === "application" ? [...serviceTools({ store, sessionId, running }), ...sandboxTools(sandbox.value)] : [],
+            // Only our own loop takes tools through the executor. The others
+            // bring their own, or are handed ours another way — the SDK
+            // harness mounts them as an in-process MCP server. This reads the
+            // row it already chose rather than asking the harness to describe
+            // itself back.
+            tools: adapter === "native"
+              ? [...serviceTools({ store, sessionId, running }), ...sandboxTools(sandbox.value)]
+              : [],
             decide,
             // A finished agent tells whoever dispatched it, in the same write
             // that records its own completion. It never waits for a reply, which
@@ -293,8 +300,8 @@ function configured(
  * "Claude here, Codex there" is a field on the session, resolved to a harness.
  *
  * The five external agents are one adapter, because they speak one protocol.
- * They declare `toolUse: "harness"` — they run their own tools, which this
- * service gates and records but never claims to have validated.
+ * They run their own tools, which this service gates and records but never
+ * claims to have validated.
  */
 function buildHarness(input: {
   record: SessionRecord;

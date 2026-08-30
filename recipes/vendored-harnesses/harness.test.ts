@@ -9,13 +9,13 @@ import { createClaudeCodeHarness } from "./claude-code.ts";
 import { createPiHarness } from "./pi.ts";
 import { sandboxTools } from "./tools.ts";
 
-test("Claude Code with its own hands refuses a sandbox it cannot reach", async () => {
+test("Claude Code keeping its own tools refuses a sandbox it cannot reach", async () => {
   // Nothing is started: the refusal is the point. Its built-in tools run in
   // this process, so calling a container "contained" while they are in place
   // would be the simulated guarantee this library exists to avoid.
   const harness = createClaudeCodeHarness({
     sandbox: { isolation: "container", root: "/home/user" } as never,
-    hands: "own",
+    tools: "theirs",
   });
   const result = await harness.run({
     sessionId: "s", runId: "r", instructions: "",
@@ -27,14 +27,15 @@ test("Claude Code with its own hands refuses a sandbox it cannot reach", async (
   expect(result.error.code).toBe("unsupported");
 });
 
-test("the two harnesses declare different control points, and say so", () => {
-  const claude = createClaudeCodeHarness({ sandbox: { isolation: "none" } as never, hands: "sandbox" });
+test("only the harness that can be seeded from the log claims recovery", () => {
+  const claude = createClaudeCodeHarness({ sandbox: { isolation: "none" } as never, tools: "ours" });
   const pi = createPiHarness({ baseUrl: "http://127.0.0.1:1", token: "t" });
 
-  // Claude Code owns its context and validates its own arguments; Pi's
-  // transcript is assigned from the log and its calls run through our executor.
-  expect([claude.toolUse, claude.recovery]).toEqual(["harness", "none"]);
-  expect([pi.toolUse, pi.recovery]).toEqual(["application", "history"]);
+  // Claude Code owns its context, so an interrupted run is over and `runAgent`
+  // closes the session rather than handing it out again. Pi's transcript is
+  // assigned from committed entries every activation, so it can be continued.
+  expect(claude.recovery).toBe("none");
+  expect(pi.recovery).toBe("history");
 });
 
 /**
@@ -55,7 +56,7 @@ for (const which of ["claude-code", "pi"] as const) {
     const sandbox = opened.value;
 
     const wire = serveAnthropicWire({
-      model: createOpenRouterModel({ apiKey: live!, model: "anthropic/claude-sonnet-5", appName: "aglib-sdk-harness" }),
+      model: createOpenRouterModel({ apiKey: live!, model: "anthropic/claude-sonnet-5", appName: "aglib-vendored-harnesses" }),
     });
     const instructions = "You are a careful assistant working inside a sandbox. Be brief.";
     const agent: Agent = which === "pi"
@@ -67,7 +68,7 @@ for (const which of ["claude-code", "pi"] as const) {
       : {
           id: "t", version: "1", instructions,
           harness: createClaudeCodeHarness({
-            sandbox, hands: "sandbox",
+            sandbox, tools: "ours",
             env: {
               ...process.env as Record<string, string>,
               ANTHROPIC_BASE_URL: wire.url,

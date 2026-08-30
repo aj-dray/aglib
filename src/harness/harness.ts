@@ -97,15 +97,26 @@ export type HarnessResult =
 /**
  * Executes one activation of an agent.
  *
- * Two facts, not eight. Everything the old capability matrix carried was either
- * optional output, a different subsystem, or something no consumer asked about:
- * a caller only ever needs to know whose tools run, and whether an unfinished
- * activation can restart from the log.
+ * One fact, not eight. Everything the old capability matrix carried was either
+ * optional output, a different subsystem, or something no consumer asked about.
+ *
+ * `toolUse` went the same way, one release later. It claimed to say whose tools
+ * ran — "application" through the executor, "harness" its own — and three
+ * things were wrong with it. Nothing branched on it; no document owned the
+ * claim; and the word did not survive contact with the adapters. A harness can
+ * run a *vendor's* tools through our executor, validated and authorized, and a
+ * harness can run tools *we wrote* inside its own process. Whose tools, whose
+ * code and whose authority are three questions, and one enum answered none of
+ * them reliably.
+ *
+ * The question it was reaching for — did anyone authorize this call — is a fact
+ * about a call, not about a harness, and belongs on the tool entry if and when
+ * something needs to read it. `recipes/vendored-harnesses` and
+ * `docs/ARCHITECTURE.md` carry the per-adapter comparison in prose, which is
+ * where a fact about adapters belongs and where it can be accurate.
  */
 export interface Harness {
   readonly id: string;
-  /** "application": through the executor, validated and authorized. "harness": its own, which we never claim to have authorized. */
-  readonly toolUse: "application" | "harness" | "none";
   /** "history": committed entries are enough to restart. "none": an interrupted run is over. */
   readonly recovery: "history" | "none";
   run(context: HarnessContext): Promise<HarnessResult>;

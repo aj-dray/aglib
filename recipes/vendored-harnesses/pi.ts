@@ -39,10 +39,6 @@ export interface PiOptions {
 export function createPiHarness(options: PiOptions): Harness {
   return {
     id: "pi",
-    // Its loop, our tools: every call it makes is prepared and executed by the
-    // executor, against a schema we wrote. That is the difference between this
-    // and every agent driven over the protocol.
-    toolUse: "application",
     // Its transcript is assigned from the log at the start of every activation,
     // so an interrupted run is continued rather than begun again.
     recovery: "history",
