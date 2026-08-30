@@ -79,7 +79,10 @@ const requestSchema = z.object({
   max_tokens: z.number().int().positive(),
   system: z.union([z.string(), z.array(textBlock)]).optional(),
   messages: z.array(z.object({
-    role: z.enum(["user", "assistant"]),
+    // `system` is here because current Anthropic models take an operator
+    // instruction mid-conversation, as a message rather than an edit to the
+    // top-level field. Refusing it is refusing the clients that send it.
+    role: z.enum(["user", "assistant", "system"]),
     content: z.union([
       z.string(),
       z.array(z.union([textBlock, imageBlock, toolUseBlock, toolResultBlock])),
@@ -147,7 +150,7 @@ export function decodeAnthropicRequest(body: unknown): Result<WireRequest, WireE
         messages.push({ role: "assistant", content: parts, ...(calls.length ? { calls } : {}) });
       }
     } else if (parts.length) {
-      messages.push({ role: "user", content: parts });
+      messages.push({ role: message.role === "system" ? "system" : "user", content: parts });
     }
   }
 
