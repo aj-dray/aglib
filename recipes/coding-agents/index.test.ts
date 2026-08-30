@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { acpAgentFor, acpAgents } from "./agents.ts";
 import { main, orientation, parseArguments } from "./index.ts";
 
+
 test("an agent that cannot run says why, before anything is started or billed", async () => {
   const row = acpAgentFor("opencode");
   expect(row?.unavailable).toBeTruthy();
@@ -32,3 +33,28 @@ test("orientation leads the message, because there is nowhere else to put it", (
   expect(task).toBe("list the files");
   expect(orientation).toContain("sandbox");
 });
+
+/**
+ * The protocol route, run.
+ *
+ * Needs somewhere for the agent's own requests to go, which is what the row's
+ * `credential` names. Point `ANTHROPIC_BASE_URL` at a real provider or at
+ * `serveAnthropicWire` from `vendored-agents` — this recipe does not know or
+ * care which, and that is the point of naming environment rather than a
+ * credential type.
+ *
+ * Two gates, like every live case here: `bun run check` is hermetic, and
+ * starting an agent over `npx` costs a download and a provider call.
+ */
+const live = process.env["AGLIB_LIVE_ACP"] === "1"
+  && (process.env["ANTHROPIC_BASE_URL"] ?? process.env["ANTHROPIC_API_KEY"]);
+const liveTest = live ? test : test.skip;
+
+liveTest("an agent started inside the sandbox lands in our log", async () => {
+  const said: string[] = [];
+  await main("Say the word pineapple and nothing else.", {
+    choice: { agent: "claude-code", sandbox: "local" },
+    write: (line) => said.push(line),
+  });
+  expect(said.join(" ").toLowerCase()).toContain("pineapple");
+}, 400_000);
