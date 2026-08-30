@@ -7,7 +7,7 @@ vendor dependency or an independent release cadence forces the split.
 
 ```text
 src/
-  json.ts  result.ts  content.ts  agent.ts  run.ts
+  json.ts  result.ts  content.ts  agent.ts  run.ts  render.ts
   session/    the log, its entries, and the projection to messages
   tools/      declaring and executing tools
   model/      the model port, its adapters, and the suite they answer

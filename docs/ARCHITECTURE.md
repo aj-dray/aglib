@@ -238,6 +238,28 @@ Each arrow points from a lower contract to a layer that imports it. `session` ow
 including `Message`, because the projection is built there. `tools` owns `ToolSpec`, because a tool
 declares it and the model merely consumes it. `scripts/checks.ts` enforces the direction.
 
+Root files sit outside that chain and may import anything, which is what `run.ts` needs and what
+`render.ts` is: a projection, not a port. `toMessages` folds committed entries into what a model is
+shown; `render` folds the update stream into what a person is shown. Neither has adapters, so
+neither has a conformance suite — there is nothing an implementation of "readable" could be held
+to, and no second implementation to hold.
+
+That is also the line between `render` and a channel, which is subtler than it looks. A channel
+does three things: decide which session a person is talking to, deliver a message exactly once, and
+put the result in a medium's own shape. The first two are an application's, and they differ per
+medium — a mail thread has to be mapped, a webhook may arrive twice. Only the third is the same
+work everywhere. Email is a channel with no projection at all: it sends `RunResult.output` and
+never reads the stream. A terminal is the opposite extreme — its identity is "the one session" and
+its delivery is a pipe that cannot fail, so a terminal channel is nothing *but* the projection,
+which is why that one looked like it belonged in the package and the others do not.
+
+The answer and the stream are also not the same thing, and only one is a message. `RunResult.output`
+is what `finished` hands to `Delivery.input` — the same `Content`, whether the recipient is a person
+or another session. The stream never becomes one: `cancelled` and `failed` carry no `output` at all,
+so a run can stream a paragraph and produce nothing deliverable. Showing that paragraph is right —
+it is most of what debugging a run is — provided the outcome is stated rather than implied, which is
+why `finish` takes it from the result and not from whatever happened to stream.
+
 ## Deployment responsibilities
 
 The application owns process placement, worker count, restart policy and deployment; aglib spawns

@@ -24,6 +24,9 @@ async function withHome<T>(body: (home: string) => Promise<T>): Promise<T> {
   }
 }
 
+/** Captures nothing: these cases assert on the database, not the screen. */
+const quiet = { write: () => {}, status: () => {} };
+
 const call = (name: string, args: unknown) =>
   ({ calls: [{ callId: `c${Math.random().toString(36).slice(2, 8)}`, name, arguments: JSON.stringify(args) }] });
 
@@ -34,7 +37,7 @@ test("a remembered fact is on disk, and is context for the next conversation", a
         call("memory", { action: "add", text: "Prefers metric units." }),
         { text: "Noted." },
       ]),
-      write: () => {},
+      sink: quiet,
     });
 
     const written = await Bun.file(join(home, "memory.md")).text();
@@ -52,7 +55,7 @@ test("a write over budget changes nothing and hands back what is there", async (
         call("memory", { action: "add", text: "x".repeat(memoryBudget) }),
         { text: "It did not fit." },
       ]),
-      write: () => {},
+      sink: quiet,
     });
 
     const written = await Bun.file(join(home, "memory.md")).text();
@@ -75,7 +78,7 @@ test("a spawned subagent runs from the queue, and its report reaches the parent"
         // worker then picks up.
         { text: "The September balance is 1250 GBP." },
       ]),
-      write: (line) => said.push(line),
+      sink: { write: (text) => said.push(text), status: (line) => said.push(line) },
     });
 
     const database = new Database(join(home, "agent.db"));

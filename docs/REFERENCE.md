@@ -41,6 +41,10 @@ Every name a consumer can import, by entry point. What each one means belongs to
 
 `Answering` · `ConformanceCase` · `defineModelConformance` · `ModelScript` · `ModelUnderTest` · `SentRequest` · `Wire`
 
+### `aglib/render`
+
+`renderRun` · `RunResult` · `Sink` · `ToolCall` · `Update` · `Usage`
+
 ### `aglib/sandbox`
 
 `CommandResult` · `NetworkPolicy` · `Sandbox` · `SandboxError` · `SandboxProcess` · `SandboxProvider` · `Secret`

@@ -9,6 +9,7 @@
 import { createOpenAiCompatibleModel, createOpenRouterModel } from "aglib/model/adapters/openai-compatible";
 import { createAnthropicModel } from "aglib/model/adapters/anthropic";
 import type { Model, ModelRequest } from "aglib/model";
+import type { Sink } from "aglib/render";
 import { sandboxKinds, type SandboxKind } from "./sandbox.ts";
 
 export const providers = ["openrouter", "openai", "anthropic"] as const;
@@ -19,6 +20,8 @@ export interface Choice {
   model: string;
   sandbox: SandboxKind;
   effort?: ModelRequest["effort"];
+  /** How much of the run to show. `debug` is for working out why it did that. */
+  detail?: Sink["detail"];
 }
 
 const defaultModel: Record<Provider, string> = {
@@ -45,7 +48,7 @@ export function createChosenModel(choice: Choice): Model {
   return createOpenRouterModel({ apiKey, model, appName: "aglib-native-agents" });
 }
 
-/** `--provider x --model y --effort high --sandbox docker` — everything else is the task. */
+/** `--provider x --model y --effort high --sandbox docker --detail debug` — the rest is the task. */
 export function parseArguments(argv: readonly string[]): { choice: Choice; task: string } {
   const flags = new Map<string, string>();
   const words: string[] = [];
@@ -68,8 +71,16 @@ export function parseArguments(argv: readonly string[]): { choice: Choice; task:
     throw new Error(`Unknown effort '${effort}'. One of: low, medium, high`);
   }
 
+  const detail = flags.get("detail") as Sink["detail"] | undefined;
+  if (detail && !["answer", "normal", "debug"].includes(detail)) {
+    throw new Error(`Unknown detail '${detail}'. One of: answer, normal, debug`);
+  }
+
   return {
-    choice: { provider, model: flags.get("model") || defaultModel[provider], sandbox, ...(effort ? { effort } : {}) },
+    choice: {
+      provider, model: flags.get("model") || defaultModel[provider], sandbox,
+      ...(effort ? { effort } : {}), ...(detail ? { detail } : {}),
+    },
     task: words.join(" "),
   };
 }

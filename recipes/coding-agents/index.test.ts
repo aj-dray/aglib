@@ -2,17 +2,20 @@ import { expect, test } from "bun:test";
 import { acpAgentFor, acpAgents } from "./agents.ts";
 import { main, orientation, parseArguments } from "./index.ts";
 
+/** These cases assert on the refusal, not the screen. */
+const quiet = { write: () => {}, status: () => {} };
+
 
 test("an agent that cannot run says why, before anything is started or billed", async () => {
   const row = acpAgentFor("opencode");
   expect(row?.unavailable).toBeTruthy();
   // No sandbox is opened and no process is spawned: the refusal comes first.
-  await expect(main("go", { choice: { agent: "opencode", sandbox: "local" }, write: () => {} }))
+  await expect(main("go", { choice: { agent: "opencode", sandbox: "local" }, sink: quiet }))
     .rejects.toThrow(/not available here/);
 });
 
 test("an agent nobody has heard of is refused by name, with the list", async () => {
-  await expect(main("go", { choice: { agent: "nope", sandbox: "local" }, write: () => {} }))
+  await expect(main("go", { choice: { agent: "nope", sandbox: "local" }, sink: quiet }))
     .rejects.toThrow(/Unknown agent 'nope'/);
 });
 
@@ -54,7 +57,7 @@ liveTest("an agent started inside the sandbox lands in our log", async () => {
   const said: string[] = [];
   await main("Say the word pineapple and nothing else.", {
     choice: { agent: "claude-code", sandbox: "local" },
-    write: (line) => said.push(line),
+    sink: { write: (text) => said.push(text), status: () => {} },
   });
   expect(said.join(" ").toLowerCase()).toContain("pineapple");
 }, 400_000);

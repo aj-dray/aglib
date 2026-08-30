@@ -15,6 +15,7 @@
  * registry, cheaply, keeping none of that.
  */
 import { runAgent, type Agent } from "aglib";
+import { renderRun, type Sink } from "aglib/render";
 import { createSqliteStore } from "aglib/store/adapters/sqlite";
 import { createOpenAiCompatibleModel, createOpenRouterModel } from "aglib/model/adapters/openai-compatible";
 import { createAnthropicModel } from "aglib/model/adapters/anthropic";
@@ -80,10 +81,15 @@ async function openSandbox(kind: Choice["sandbox"]): Promise<Sandbox> {
 
 export async function main(
   task: string,
-  options: { choice?: Choice; model?: Model; write?: (line: string) => void } = {},
+  options: { choice?: Choice; model?: Model; sink?: Sink } = {},
 ): Promise<string> {
   const choice = options.choice ?? defaultChoice;
-  const write = options.write ?? ((line: string) => process.stdout.write(line));
+  // The answer on stdout, what the agent did on stderr.
+  const sink: Sink = options.sink ?? {
+    write: (text) => process.stdout.write(text),
+    status: (line) => process.stderr.write(line),
+    tty: process.stderr.isTTY === true,
+  };
   const sandbox = await openSandbox(choice.sandbox);
 
   // One bridge, both harnesses. Neither vendor library learns which provider
@@ -129,13 +135,7 @@ export async function main(
   const database = new Database(":memory:");
   const store = createSqliteStore({ database });
   const sessionId = crypto.randomUUID();
-  const run = runAgent({ agent, store, sessionId, key: "me", input: task });
-  // The stream is the output. Printing `result.output` afterwards said
-  // everything twice — one answer, arriving in two ways.
-  for await (const update of run) if (update.type === "text.delta") write(update.text);
-  write("\n");
-
-  const result = await run.result;
+  const result = await renderRun(runAgent({ agent, store, sessionId, key: "me", input: task }), sink);
   await wire.close();
   await sandbox.close();
   await store.close();

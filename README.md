@@ -12,7 +12,7 @@ somewhere contained to run them, and four seams with adapters: model, store, san
 
 ```text
 src/
-  json.ts  result.ts  content.ts  agent.ts  run.ts
+  json.ts  result.ts  content.ts  agent.ts  run.ts  render.ts
 
   session/    entry.ts  log.ts  messages.ts        the log — this IS the session's state
   tools/      tool.ts  execute.ts                  declaring and running tools
@@ -133,8 +133,13 @@ The middle two answer the same question differently, and the difference is what 
 
 ## What it is not
 
-Not a workflow engine, channel gateway, scheduler, memory product, prompt registry, deployment
-control plane, or finished agent. It does not make model output trustworthy, and a local
+Not a workflow engine, scheduler, memory product, prompt registry, deployment control plane, or
+finished agent. Not a channel gateway either, and that one is worth saying precisely: a gateway
+routes between surfaces and owns identity, credentials and delivery, and none of that is here — a
+mail thread maps to a session in your code, not ours. What *is* here is `render`, the one part of
+an outward surface that is the same work for every medium: the update stream folded into lines
+someone can read. Shipping one projection is no more a gateway than `adapters/docker` is a
+container platform. It does not make model output trustworthy, and a local
 sandbox is a host process, not a sandbox — ask for `isolation: "required"` and a provider that
 cannot deliver it fails rather than pretending. `adapters/docker` is the one that can: a container
 from the local daemon, no account and no vendor SDK. A hosted box is yours to adapt.

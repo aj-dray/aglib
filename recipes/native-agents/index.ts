@@ -8,6 +8,7 @@
  * slots.
  */
 import { runAgent, textOf, type Agent } from "aglib";
+import { renderRun, type Sink } from "aglib/render";
 import { createSqliteStore } from "aglib/store/adapters/sqlite";
 import { createNativeHarness } from "aglib/harness";
 import type { Model } from "aglib/model";
@@ -25,12 +26,22 @@ export interface Options {
   model?: Model;
   choice?: Choice;
   sessionId?: string;
-  write?: (line: string) => void;
+  /** Where the run is shown. A test passes one that captures instead of printing. */
+  sink?: Sink;
 }
+
+const choiceDetail = (choice: Choice | undefined): Sink["detail"] | undefined => choice?.detail;
 
 export async function main(task: string, options: Options = {}): Promise<string> {
   const sessionId = options.sessionId ?? crypto.randomUUID();
-  const write = options.write ?? ((line: string) => process.stdout.write(line));
+  // The answer on stdout, the account of the run on stderr, so redirecting the
+  // first captures the answer and nothing else.
+  const sink: Sink = options.sink ?? {
+    write: (text) => process.stdout.write(text),
+    status: (line) => process.stderr.write(line),
+    tty: process.stderr.isTTY === true,
+    ...(choiceDetail(options.choice) ? { detail: choiceDetail(options.choice) } : {}),
+  };
   const choice = options.choice ?? { provider: "openrouter" as const, model: "deepseek/deepseek-v4-flash", sandbox: "local" as const };
 
   const home = await openHome();
@@ -85,19 +96,15 @@ export async function main(task: string, options: Options = {}): Promise<string>
     ].join("\n\n"),
   };
 
-  const run = runAgent({ agent: parent, store, sessionId, key: "me", input: task, context });
-  for await (const update of run) if (update.type === "text.delta") write(update.text);
-  write("\n");
-  const result = await run.result;
+  const result = await renderRun(
+    runAgent({ agent: parent, store, sessionId, key: "me", input: task, context }),
+    sink,
+  );
 
   // Whatever the conversation set in motion, finished. Subagents run here, and
   // their reports come back as ordinary input to the session that asked — which
   // the same worker then picks up and answers.
-  await drain({
-    store,
-    agentFor: (claim) => (isChild(claim.metadata) ? child : parent),
-    onOutput: (id, output) => write(`\n[${id === sessionId ? "assistant" : `subagent ${id.slice(0, 8)}`}] ${output}\n`),
-  });
+  await drain({ store, agentFor: (claim) => (isChild(claim.metadata) ? child : parent), sink });
 
   await sandbox.close();
   await store.close();
