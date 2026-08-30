@@ -73,7 +73,7 @@ reaches — and the suite holds it to exactly that rather than assuming.
 ```bash
 bun install --frozen-lockfile
 echo 'OPENROUTER_API_KEY=sk-or-...' > .env
-bun run recipe personal-agent "what did I decide about pricing?"
+bun run recipe native-agents "what did I decide about pricing?"
 ```
 
 ```ts
@@ -119,15 +119,17 @@ There is no price list here and no spend ceiling. The counts are the fact; the r
 
 ## Recipes
 
-Two applications, chosen because between them they exercise every seam. They are the
-specification: anything with no call site in one of them should not exist.
+Three applications, one per answer to "who does the reasoning". Between them they exercise
+every seam, and each is the smallest thing that still makes its point.
 
-| Recipe | What it proves |
-| --- | --- |
-| [`recipes/native-agent`](recipes/native-agent/README.md) | The log, memory and skills on the host, one `bash`, subagents through the queue, and a sandbox you choose. |
-| [`recipes/vendored-harnesses`](recipes/vendored-harnesses/README.md) | A vendor library wrapped as a harness — Claude Code and Pi — inside our log, our sandbox and our model port. |
-| [`recipes/personal-agent`](recipes/personal-agent/README.md) | The log, compaction, context lifetimes, tools, session search. Memory built entirely *on* the library, not in it. |
-| [`recipes/agent-service`](recipes/agent-service/README.md) | The queue, atomic cross-session handoff, a harness per session, a sandbox per session, live views. |
+| Recipe | Whose loop | What it proves |
+| --- | --- | --- |
+| [`recipes/native-agents`](recipes/native-agents/README.md) | ours | The log, compaction, memory and skills on the host, one `bash`, subagents through the queue, a sandbox you choose. |
+| [`recipes/vendored-agents`](recipes/vendored-agents/README.md) | theirs, from a library | Claude Code and Pi as harnesses — their tools reused, ours added, both on any model through the wire bridge. |
+| [`recipes/coding-agents`](recipes/coding-agents/README.md) | theirs, over a protocol | Any agent in the ACP registry, started inside the sandbox, for the price of one line of argv. |
+
+The middle two answer the same question differently, and the difference is what you keep.
+`vendored-agents` publishes the table.
 
 ## What it is not
 
@@ -135,8 +137,7 @@ Not a workflow engine, channel gateway, scheduler, memory product, prompt regist
 control plane, or finished agent. It does not make model output trustworthy, and a local
 sandbox is a host process, not a sandbox — ask for `isolation: "required"` and a provider that
 cannot deliver it fails rather than pretending. `adapters/docker` is the one that can: a container
-from the local daemon, no account and no vendor SDK. A hosted box is yours to adapt, and
-`agent-service` shows one.
+from the local daemon, no account and no vendor SDK. A hosted box is yours to adapt.
 
 It also ships no price list. Rates go stale between releases and only one provider ever reported a
 cost, so the log carries token counts and the money is arithmetic over a table you pass in.
@@ -150,17 +151,18 @@ orchestration — around whatever does the reasoning inside.
 | --- | --- |
 | A loop you own end to end | Use `adapters/native` |
 | Your own reasoning strategy | Write a `Harness` and drop it in |
-| A vendor SDK, deeply integrated | Wrap it as a `Harness` — you keep its prompt, tools and settings, and choose which to override |
-| Somebody else's whole agent, cheaply | Use `adapters/acp` — any agent in the ACP registry, still inside your log, tools and sandbox |
+| A vendor SDK, deeply integrated | Wrap it as a `Harness` — keep its prompt and tools, reuse them as your own where the vendor publishes them as values, and add yours beside |
+| Somebody else's whole agent, cheaply | Use `adapters/acp` — any agent in the ACP registry, still inside your log, sandbox and permission decision |
 
-The last two are not equivalent, and `recipes/agent-service` publishes a table of exactly which
-control points each one gives you.
+The last two are not equivalent, and `recipes/vendored-agents` publishes a table of exactly which
+control points each one gives you — including the one that decides it, which is whether the
+vendor ships its tools as values you can take or only as names you can switch on.
 
 ## Development
 
 ```bash
 bun run check     # typecheck, tests, build, Node verification, recipes, docs, invariants
-bun run recipe personal-agent "..."
+bun run recipe native-agents "..."
 ```
 
 `bun run check` is the green gate. A failing check is a decision, not an obstacle: fix the code,

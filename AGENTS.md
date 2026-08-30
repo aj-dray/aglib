@@ -21,10 +21,12 @@ those change on another lifecycle and live outside the repository.
 
 ## Surface earns its place, and there are two ways to earn it
 
-- [`recipes/personal-agent`](recipes/personal-agent/README.md) — the log, compaction, context
-  lifetimes, tools, cross-session search.
-- [`recipes/agent-service`](recipes/agent-service/README.md) — the queue, atomic cross-session
-  handoff, a harness and a sandbox per session, live views.
+- [`recipes/native-agents`](recipes/native-agents/README.md) — our loop: the log, compaction,
+  context lifetimes, tools, and the queue carrying work between sessions.
+- [`recipes/vendored-agents`](recipes/vendored-agents/README.md) — a vendor's loop from its
+  library: their tools reused under our authority, ours added beside, on our model port.
+- [`recipes/coding-agents`](recipes/coding-agents/README.md) — a vendor's loop over a protocol:
+  a sandbox per agent, and a decision on every call we did not write.
 - The conformance suites — what an adapter must prove, for the implementations that are not here.
 
 **Surface with no consumer should not exist. A recipe that composes it is one consumer; a

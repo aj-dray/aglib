@@ -77,7 +77,7 @@ results, which is the last point at which nothing is half-done — so a `turn` d
 session and the session keeps its work. A harness that owns its own loop has no such point to offer,
 and there a `turn` delivery waits for the next activation instead. It is never promoted to ending the
 one that is running: a sender asking for the place that costs nothing does not get the one that costs
-a turn. The capability table in `agent-service` says which harness offers which.
+a turn. The table in `recipes/vendored-agents` says which harness offers which.
 
 **Durable partial text on cancellation.** Streamed deltas are provisional. Committed entries are
 not.
@@ -115,8 +115,9 @@ by a recipe or deleted.
 
 The strongest of them is that the ports have more than one implementation and one executable
 contract between them. Two stores and three sandboxes answer the same cases. Pointing those cases at
-the adapters that had been read into existence from the interface alone — the Postgres store and the
-hosted sandbox in `agent-service` — failed both of them, on things no type could have caught: a
+the adapters that had been read into existence from the interface alone — a Postgres store and a
+hosted sandbox, both written outside this package — failed both of them, on things no type could
+have caught: a
 claim renewed when a run started rather than on every write it made, a failed delivery that
 committed the sender's entries anyway, a staleness window as wide as the clock skew between two
 machines, paths never confined to their root, a close that reported a refusal to release, and one
