@@ -23,6 +23,13 @@
         "zod": "^4.4.3",
       },
     },
+    "recipes/native-agent": {
+      "name": "@aglib-recipe/native-agent",
+      "dependencies": {
+        "aglib": "file:../..",
+        "zod": "^4.4.3",
+      },
+    },
     "recipes/personal-agent": {
       "name": "@aglib-recipe/personal-agent",
       "dependencies": {
@@ -33,6 +40,8 @@
   },
   "packages": {
     "@aglib-recipe/agent-service": ["@aglib-recipe/agent-service@workspace:recipes/agent-service"],
+
+    "@aglib-recipe/native-agent": ["@aglib-recipe/native-agent@workspace:recipes/native-agent"],
 
     "@aglib-recipe/personal-agent": ["@aglib-recipe/personal-agent@workspace:recipes/personal-agent"],
 
@@ -607,6 +616,8 @@
     "zod": ["zod@4.4.3", "", {}, "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="],
 
     "zod-to-json-schema": ["zod-to-json-schema@3.25.2", "", { "peerDependencies": { "zod": "^3.25.28 || ^4" } }, "sha512-O/PgfnpT1xKSDeQYSCfRI5Gy3hPf91mKVDuYLUHZJMiDFptvP41MSnWofm8dnCm0256ZNfZIM7DSzuSMAFnjHA=="],
+
+    "@aglib-recipe/native-agent/aglib": ["aglib@root:", {}],
 
     "accepts/mime-types": ["mime-types@3.0.2", "", { "dependencies": { "mime-db": "^1.54.0" } }, "sha512-Lbgzdk0h4juoQ9fCKXW4by0UJqj+nOOrI9MJ1sSj4nI8aI2eo1qmvQEie4VD1glsS250n15LsWsYtCugiStS5A=="],
 
