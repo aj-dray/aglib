@@ -66,6 +66,40 @@ compaction. Learned facts, skills, session search and retrieval are application 
 library through two seams — tools, and run-scoped context. Both recipes demonstrate this, which is
 why there is no `memory/` module and should not be one.
 
+## What the log is worth when the loop is not ours
+
+A fair question, and it has a precise answer rather than a hopeful one. Four things hold for
+**every** harness, whoever owns the reasoning:
+
+- **One rendering.** `render` draws a turn from our loop and a turn from a vendor's identically,
+  because both arrive as the same entries.
+- **One record.** Search, audit and `usage` are the same fact however it was produced; a run that
+  burned tokens and then failed says so, whichever loop burned them.
+- **One permission model.** `decide` runs on every call, including the ones inside somebody else's
+  agent.
+- **One way to hand work over.** A vendor-driven session can spawn a child and receive its report,
+  because `enqueue` is ours and not theirs.
+
+A fifth does not hold everywhere, and that is what `recovery` exists to say: **whether our log is
+enough to put the agent back.** It is, exactly where a vendor exposes its transcript as something
+we can assign. Pi does, so `recipes/vendored-agents` stages a killed worker's session — everything
+through a committed tool result, no terminal entry — and Pi finishes it from the log without
+re-running the effect. The Claude Agent SDK and the Agent Client Protocol do not: both accept a
+*user* turn or an instruction to load their own session, and neither accepts a conversation we
+assembled. That is their surface, not our design, and the log is not the thing missing — a
+`ContentPart` of kind `opaque` exists precisely so a provider's own blocks survive verbatim.
+
+So the requirement "our log can reconstruct the inner agent" is a real and desirable property, and
+it is a per-harness one. Making it a promise of the package would mean claiming a capability half
+the harnesses cannot keep, which is the simulated guarantee this document forbids two sections down.
+It follows that the useful way to choose a harness is by **who should own the conversation**, and
+`recovery` is where each one answers.
+
+There is deliberately no fallback that replays our log to a vendor agent as a priming message when
+its own session is gone. It would look like recovery and would not be: the agent would be told what
+happened rather than remembering it, its behaviour would differ in ways nothing here could predict,
+and the conversation would be re-sent every time a session id went stale.
+
 ## Not guaranteed
 
 **Exactly-once external side effects.** A call whose result never committed is closed in the

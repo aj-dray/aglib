@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { createSqliteStore } from "aglib/store/adapters/sqlite";
-import { runAgent, type Agent } from "aglib";
+import { runAgent, defineTool, textOf, type Agent } from "aglib";
+import { z } from "zod";
 import { createLocalSandboxProvider } from "aglib/sandbox/adapters/local";
 import { createOpenRouterModel } from "aglib/model/adapters/openai-compatible";
 import { serveAnthropicWire } from "./wire.ts";
@@ -136,4 +137,73 @@ liveTest("pi remembers the turn before, from the log rather than its own memory"
     sink: { write: (text) => said.push(text), status: () => {} },
   });
   expect(said.join(" ")).toContain("8315");
+}, 300_000);
+
+/**
+ * The claim `recovery: "history"` makes, run against a vendor's loop.
+ *
+ * `src/run.test.ts` proves the machinery with our own harness. This proves the
+ * part that matters for a *foreign* one: that our durable log is enough to put
+ * a vendor agent back where a killed worker left it. Pi can be, because its
+ * transcript is a field we assign. Claude Code and an ACP agent cannot, which
+ * is why they say `recovery: "none"` and `runAgent` closes their interrupted
+ * sessions instead of handing them out for ever.
+ */
+liveTest("pi is put back where a killed worker left it, from our log alone", async () => {
+  const provider = createLocalSandboxProvider({ root: process.cwd() });
+  const opened = await provider.create({ isolation: "none", network: { mode: "unrestricted" } });
+  expect(opened.ok).toBe(true);
+  if (!opened.ok) return;
+
+  const wire = serveAnthropicWire({
+    model: createOpenRouterModel({ apiKey: live!, model: "anthropic/claude-sonnet-5", appName: "aglib-vendored-agents" }),
+  });
+
+  let ran = 0;
+  const ledger = defineTool({
+    name: "read_ledger",
+    description: "Read the September ledger.",
+    schema: z.object({}),
+    execute: () => { ran += 1; return { content: "1250 GBP" }; },
+  });
+
+  const database = new Database(":memory:");
+  const store = createSqliteStore({ database });
+  const agent = {
+    id: "t", version: "1",
+    instructions: "Answer from the ledger. Be brief.",
+    harness: createPiHarness({ baseUrl: wire.url, token: wire.token }),
+    tools: [ledger],
+  };
+
+  // Exactly the state a killed worker leaves: everything through a committed
+  // tool result, and no terminal entry.
+  await store.create({ sessionId: "s", agent: { id: "t", version: "1" } });
+  await store.append({
+    sessionId: "s", expectedSeq: 0,
+    entries: [
+      { type: "run.started", runId: "interrupted", input: "What is the September balance?" },
+      { type: "assistant", runId: "interrupted", content: "", calls: [{ callId: "c1", name: "read_ledger", arguments: "{}" }] },
+      { type: "tool.started", runId: "interrupted", callId: "c1" },
+      { type: "tool.finished", runId: "interrupted", callId: "c1", result: { content: "1250 GBP" } },
+    ],
+  });
+
+  const result = await runAgent({
+    agent, store, claim: { sessionId: "s", seq: 4, pending: [], metadata: {} },
+  }).result;
+
+  await wire.close();
+  await opened.value.close();
+
+  expect(result.status).toBe("completed");
+  if (result.status !== "completed") return;
+  // It answered from a tool call it never made, because the log told it the
+  // answer was already given. Re-running the effect would have been the bug.
+  expect(textOf(result.output)).toContain("1250");
+  expect(ran).toBe(0);
+
+  const after = await store.read({ sessionId: "s" });
+  expect(after.ok && after.value.entries.filter((entry) => entry.type === "run.started")).toHaveLength(1);
+  await store.close();
 }, 300_000);
