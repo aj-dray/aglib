@@ -168,3 +168,29 @@ test("a conversation is one session, and a script is one shot", async () => {
     expect(said.join("")).toContain("You said you like metric.");
   });
 });
+
+test("a slash line is for the terminal, and never reaches the agent", async () => {
+  await withHome(async (home) => {
+    const said: string[] = [];
+    const sessionId = await main("", {
+      turns: {
+        interactive: true,
+        lines: (async function* () { yield "/model"; yield "/nonsense"; yield "hello"; })(),
+      },
+      model: createFakeModel([{ text: "hi" }]),
+      sink: { write: (text) => said.push(text), status: (line) => said.push(line) },
+    });
+
+    expect(said.join("")).toContain("Answering with openrouter");
+    expect(said.join("")).toContain("No command '/nonsense'");
+
+    // One turn in the log, not three: the commands were answered by the
+    // terminal and the agent never saw them.
+    const starts = (new Database(join(home, "agent.db"))
+      .query("SELECT body FROM entries WHERE session_id = ? ORDER BY seq").all(sessionId) as { body: string }[])
+      .map((row) => JSON.parse(row.body) as { type: string; input?: unknown })
+      .filter((entry) => entry.type === "run.started");
+    expect(starts).toHaveLength(1);
+    expect(JSON.stringify(starts)).not.toContain("/model");
+  });
+});

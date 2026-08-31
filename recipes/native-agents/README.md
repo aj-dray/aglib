@@ -28,6 +28,25 @@ terminal, which is the same rule every other command-line program follows:
 script behaviour anyway. There is no flag for the reverse, because prompting
 into a pipe would wait for a person who is not there.
 
+## At the prompt
+
+A line beginning with `/` is for the terminal, not the agent — it never reaches
+the log.
+
+```
+/model                        what is answering now
+/model <name>                 switch model, keeping the provider
+/model <provider> <name>      switch both
+/detail answer|normal|debug   how much of a run to show
+/help
+```
+
+A model is a value here rather than a name the library resolves, so switching
+one builds a different `Model`, a different harness and a different agent — from
+the next turn, and the subagent too. The prompt cache is scoped to the model
+that filled it, so the turn after a switch pays full price for the instructions
+and context again. `/model` says so rather than leaving it to an invoice.
+
 `--detail answer | normal | debug` decides how much of the run you see. The
 answer always goes to stdout and everything else to stderr, so redirecting
 captures the answer alone. `debug` adds reasoning, arguments as they form, and
