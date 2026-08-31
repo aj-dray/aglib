@@ -7,7 +7,7 @@
  * in this directory; the library provides the log, the loop, and two context
  * slots.
  */
-import { runAgent, textOf, type Agent } from "aglib";
+import { runAgent, textOf, type Agent, type RunResult } from "aglib";
 import { renderRun, type Sink } from "aglib/render";
 import { createSqliteStore } from "aglib/store/adapters/sqlite";
 import { createNativeHarness } from "aglib/harness";
@@ -21,6 +21,7 @@ import { listSkills, renderSkillIndex, skillTools } from "./skills.ts";
 import { bashTools, openSandbox, type SandboxKind } from "./sandbox.ts";
 import { drain, isChild, reportToParent, spawnTools } from "./spawn.ts";
 import { createChosenModel, parseArguments, type Choice } from "./model.ts";
+import { turnsFrom, type TurnSource } from "./turns.ts";
 
 export interface Options {
   model?: Model;
@@ -28,12 +29,15 @@ export interface Options {
   sessionId?: string;
   /** Where the run is shown. A test passes one that captures instead of printing. */
   sink?: Sink;
+  /** Where turns come from. Defaults to argv and the terminal; a test scripts them. */
+  turns?: TurnSource;
 }
 
 const choiceDetail = (choice: Choice | undefined): Sink["detail"] | undefined => choice?.detail;
 
 export async function main(task: string, options: Options = {}): Promise<string> {
   const sessionId = options.sessionId ?? crypto.randomUUID();
+  const turns = options.turns ?? turnsFrom({ task, once: options.choice?.once === true });
   // The answer on stdout, the account of the run on stderr, so redirecting the
   // first captures the answer and nothing else.
   const sink: Sink = options.sink ?? {
@@ -96,20 +100,31 @@ export async function main(task: string, options: Options = {}): Promise<string>
     ].join("\n\n"),
   };
 
-  const result = await renderRun(
-    runAgent({ agent: parent, store, sessionId, key: "me", input: task, context }),
-    sink,
-  );
+  // One session for every turn, which is what makes this a conversation rather
+  // than a series of strangers — and the only way the compaction this agent
+  // configures is ever reached.
+  let last: RunResult | undefined;
+  for await (const input of turns.lines) {
+    last = await renderRun(
+      runAgent({ agent: parent, store, sessionId, key: "me", input, context }),
+      sink,
+    );
 
-  // Whatever the conversation set in motion, finished. Subagents run here, and
-  // their reports come back as ordinary input to the session that asked — which
-  // the same worker then picks up and answers.
-  await drain({ store, agentFor: (claim) => (isChild(claim.metadata) ? child : parent), sink });
+    // Whatever that turn set in motion, finished before the next prompt.
+    // Subagents run here, and their reports come back as ordinary input to the
+    // session that asked — which the same worker then picks up and answers.
+    await drain({ store, agentFor: (claim) => (isChild(claim.metadata) ? child : parent), sink });
+
+    // A failed turn ends a script, because its exit code is the answer. It does
+    // not end a conversation: the renderer has already said what went wrong,
+    // and the person is still sitting there.
+    if (!turns.interactive) break;
+  }
 
   await sandbox.close();
   await store.close();
-  if (result.status !== "completed") {
-    throw new Error(result.status === "failed" ? `run failed: ${result.error.message}` : `run ${result.status}`);
+  if (!turns.interactive && last && last.status !== "completed") {
+    throw new Error(last.status === "failed" ? `run failed: ${last.error.message}` : `run ${last.status}`);
   }
   return sessionId;
 }

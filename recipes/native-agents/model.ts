@@ -22,6 +22,8 @@ export interface Choice {
   effort?: ModelRequest["effort"];
   /** How much of the run to show. `debug` is for working out why it did that. */
   detail?: Sink["detail"];
+  /** Answer once and exit, for someone who has a terminal and wants the script behaviour. */
+  once?: boolean;
 }
 
 const defaultModel: Record<Provider, string> = {
@@ -50,12 +52,18 @@ export function createChosenModel(choice: Choice): Model {
 
 /** `--provider x --model y --effort high --sandbox docker --detail debug` — the rest is the task. */
 export function parseArguments(argv: readonly string[]): { choice: Choice; task: string } {
+  // Flags that take no value have to be named, or `--once "do the thing"`
+  // swallows the task as `once`'s argument and the agent is asked nothing.
+  const valueless = new Set(["once"]);
   const flags = new Map<string, string>();
   const words: string[] = [];
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]!;
-    if (argument.startsWith("--")) { flags.set(argument.slice(2), argv[index + 1] ?? ""); index += 1; }
-    else words.push(argument);
+    if (!argument.startsWith("--")) { words.push(argument); continue; }
+    const name = argument.slice(2);
+    if (valueless.has(name)) { flags.set(name, "true"); continue; }
+    flags.set(name, argv[index + 1] ?? "");
+    index += 1;
   }
 
   const provider = (flags.get("provider") ?? "openrouter") as Provider;
@@ -80,6 +88,7 @@ export function parseArguments(argv: readonly string[]): { choice: Choice; task:
     choice: {
       provider, model: flags.get("model") || defaultModel[provider], sandbox,
       ...(effort ? { effort } : {}), ...(detail ? { detail } : {}),
+      ...(flags.has("once") ? { once: true } : {}),
     },
     task: words.join(" "),
   };
