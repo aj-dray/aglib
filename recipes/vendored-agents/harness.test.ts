@@ -8,6 +8,7 @@ import { serveAnthropicWire } from "./wire.ts";
 import { createClaudeCodeHarness } from "./claude-code.ts";
 import { createPiHarness } from "./pi.ts";
 import { sandboxTools } from "./tools.ts";
+import { defaultChoice, main } from "./index.ts";
 
 test("Claude Code keeping its own tools refuses a sandbox it cannot reach", async () => {
   // Nothing is started: the refusal is the point. Its built-in tools run in
@@ -104,3 +105,35 @@ for (const which of ["claude-code", "pi"] as const) {
     await store.close();
   }, 300_000);
 }
+
+/**
+ * The gap this recipe had: an agent that keeps its own context was told
+ * nothing about the last turn, so a second question landed on a stranger.
+ * Pi never had it — its transcript is assigned from the log every activation —
+ * which is the whole of what `recovery: "history"` is claiming.
+ */
+liveTest("claude-code remembers the turn before, because it is handed its own session back", async () => {
+  const said: string[] = [];
+  await main("", {
+    choice: { ...defaultChoice, harness: "claude-code", tools: "ours" },
+    turns: (async function* () {
+      yield "Remember the number 4127. Reply with just: noted.";
+      yield "What number did I just ask you to remember? Reply with just the number.";
+    })(),
+    sink: { write: (text) => said.push(text), status: () => {} },
+  });
+  expect(said.join(" ")).toContain("4127");
+}, 300_000);
+
+liveTest("pi remembers the turn before, from the log rather than its own memory", async () => {
+  const said: string[] = [];
+  await main("", {
+    choice: { ...defaultChoice, harness: "pi" },
+    turns: (async function* () {
+      yield "Remember the number 8315. Reply with just: noted.";
+      yield "What number did I just ask you to remember? Reply with just the number.";
+    })(),
+    sink: { write: (text) => said.push(text), status: () => {} },
+  });
+  expect(said.join(" ")).toContain("8315");
+}, 300_000);

@@ -80,6 +80,24 @@ export interface ClaudeCodeOptions {
   decide?: Decide;
   /** Non-secret configuration for the agent process — where its model lives, most of all. */
   env?: Readonly<Record<string, string>>;
+  /**
+   * Claude's own session id, so this activation continues its context.
+   *
+   * The alternative was to feed it `context.history()` every turn, the way the
+   * Pi harness does, and the choice is not obvious. Replaying our log makes it
+   * the single source of truth and survives the agent forgetting; resuming
+   * keeps the agent's own context, its own prompt cache and its own
+   * compaction, which are much of what buying into an SDK is for — and paying
+   * to re-send the whole conversation to an agent that already has it is the
+   * kind of waste that only shows up on an invoice.
+   *
+   * Resuming is why this harness declares `recovery: "none"`: the context that
+   * matters lives over there, so our entries describe what happened without
+   * being able to put it back.
+   */
+  resume?: string;
+  /** Called with Claude's session id, so a caller can hand it back next turn. */
+  onSession?(sessionId: string): void;
 }
 
 export function createClaudeCodeHarness(options: ClaudeCodeOptions): Harness {
@@ -117,7 +135,7 @@ async function runTurn(options: ClaudeCodeOptions, context: HarnessContext): Pro
         type: "user" as const,
         message: { role: "user" as const, content: inputFor(context) },
         parent_tool_use_id: null,
-        session_id: "",
+        session_id: options.resume ?? "",
       };
     })(),
     options: optionsFor(options, context),
@@ -130,7 +148,7 @@ async function runTurn(options: ClaudeCodeOptions, context: HarnessContext): Pro
 
   try {
     for await (const message of running) {
-      const committed = await receive(message, context, counted);
+      const committed = await receive(message, options, context, counted);
       if (committed.output !== undefined) output = committed.output;
       if (committed.failure) failure = committed.failure;
     }
@@ -229,6 +247,7 @@ function optionsFor(options: ClaudeCodeOptions, context: HarnessContext): Option
         }
       : {}),
 
+    ...(options.resume ? { resume: options.resume } : {}),
     ...(options.model ? { model: options.model } : {}),
     ...(options.effort ? { thinking: { type: "enabled" as const, budgetTokens: budgets[options.effort] } } : {}),
     ...(options.env ? { env: options.env as Record<string, string> } : {}),
@@ -245,9 +264,18 @@ function optionsFor(options: ClaudeCodeOptions, context: HarnessContext): Option
  */
 async function receive(
   message: SDKMessage,
+  options: ClaudeCodeOptions,
   context: HarnessContext,
   counted: Set<string>,
 ): Promise<{ output?: string; failure?: string }> {
+  // Its session id, reported once when the agent starts. A caller persists it
+  // and hands it back as `resume`, which is the whole of continuing a
+  // conversation with an agent that keeps its own context.
+  if (message.type === "system" && message.subtype === "init") {
+    options.onSession?.(message.session_id);
+    return {};
+  }
+
   if (message.type === "assistant") {
     const blocks = message.message.content as unknown as readonly Block[];
     const said = blocks.filter((block) => block.type === "text").map((block) => String(block["text"] ?? "")).join("");

@@ -14,7 +14,7 @@
  * `coding-agents` is the other end of the same argument: any agent in the
  * registry, cheaply, keeping none of that.
  */
-import { runAgent, type Agent } from "aglib";
+import { runAgent, type Agent, type RunResult } from "aglib";
 import { renderRun, type Sink } from "aglib/render";
 import { createSqliteStore } from "aglib/store/adapters/sqlite";
 import { createOpenAiCompatibleModel, createOpenRouterModel } from "aglib/model/adapters/openai-compatible";
@@ -79,9 +79,18 @@ async function openSandbox(kind: Choice["sandbox"]): Promise<Sandbox> {
   return sandbox.value;
 }
 
+/**
+ * What an agent that keeps its own context needs handed back.
+ *
+ * aglib stores this and never reads it — a session's metadata is the
+ * application's, and "which conversation is this, over there" is exactly the
+ * kind of fact it is for.
+ */
+interface VendorSession { vendorSessionId?: string }
+
 export async function main(
   task: string,
-  options: { choice?: Choice; model?: Model; sink?: Sink } = {},
+  options: { choice?: Choice; model?: Model; sink?: Sink; turns?: AsyncIterable<string> } = {},
 ): Promise<string> {
   const choice = options.choice ?? defaultChoice;
   // The answer on stdout, what the agent did on stderr.
@@ -97,9 +106,17 @@ export async function main(
   const wire = serveAnthropicWire({ model: options.model ?? createChosenModel(choice) });
 
   const instructions = "You are a careful assistant working inside a sandbox. Be brief and say what you did.";
-  const agent: Agent = choice.harness === "pi"
+
+  // Captured while a run is in flight and written after it commits. Appending
+  // mid-run would race the harness for the session's position and lose.
+  let vendorSessionId: string | undefined;
+
+  const agentFor = (): Agent => choice.harness === "pi"
     ? {
         id: "vendored-agents", version: "1", instructions,
+        // Pi needs nothing here: `transcriptFor` assigns `state.messages` from
+        // the committed log every activation, which is why it is the one vendor
+        // harness that can declare `recovery: "history"`.
         harness: createPiHarness({
           baseUrl: wire.url, token: wire.token,
           ...(choice.effort ? { effort: choice.effort } : {}),
@@ -117,6 +134,10 @@ export async function main(
         harness: createClaudeCodeHarness({
           sandbox,
           tools: choice.tools,
+          // Its context lives over there, so continuing a conversation means
+          // handing back the name it knows the conversation by.
+          ...(vendorSessionId ? { resume: vendorSessionId } : {}),
+          onSession: (id) => { vendorSessionId = id; },
           ...(choice.effort ? { effort: choice.effort } : {}),
           env: {
             ...process.env as Record<string, string>,
@@ -135,11 +156,29 @@ export async function main(
   const database = new Database(":memory:");
   const store = createSqliteStore({ database });
   const sessionId = crypto.randomUUID();
-  const result = await renderRun(runAgent({ agent, store, sessionId, key: "me", input: task }), sink);
+  let result: RunResult | undefined;
+  for await (const input of options.turns ?? [task]) {
+    // Rebuilt each turn, because `resume` is only known after the first one has
+    // told us what the agent calls this conversation.
+    result = await renderRun(runAgent({ agent: agentFor(), store, sessionId, key: "me", input }), sink);
+
+    // Written once the run has committed everything it is going to. Appending
+    // mid-run would race the harness for the session's position and lose.
+    if (vendorSessionId) {
+      const read = await store.read({ sessionId });
+      if (read.ok && (read.value.metadata as VendorSession | null)?.vendorSessionId !== vendorSessionId) {
+        await store.append({
+          sessionId, expectedSeq: read.value.seq, entries: [],
+          metadata: { vendorSessionId } satisfies VendorSession,
+        });
+      }
+    }
+  }
+
   await wire.close();
   await sandbox.close();
   await store.close();
-  if (result.status !== "completed") {
+  if (result && result.status !== "completed") {
     throw new Error(result.status === "failed" ? `run failed: ${result.error.message}` : `run ${result.status}`);
   }
   return sessionId;
