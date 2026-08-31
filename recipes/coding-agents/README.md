@@ -55,6 +55,17 @@ nothing embeddable either.
 Claude Code appears in both, on purpose. It is the one agent where you can hold
 the comparison still and change only the route.
 
+## Holding a conversation
+
+The agent owns its context, so continuing one means handing back the name it
+knows it by. The adapter asks for `session/load` when given `resume`, and
+reports the id through `onSession`; this recipe keeps it in the session's
+metadata, which is what metadata is for — aglib stores it and never reads it.
+
+Orientation leads the *first* turn only. The protocol has no system-prompt
+field, so it has nowhere else to go; repeating it every turn would be the same
+words again to an agent that already has them.
+
 ## Running the live test
 
 ```bash

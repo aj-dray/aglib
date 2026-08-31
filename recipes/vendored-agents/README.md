@@ -67,6 +67,29 @@ The question it reached for — did anyone authorize this call — is a property
 a call rather than a harness, and with `--tools both` it genuinely varies within
 one run. It belongs on the tool entry if something ever needs to read it.
 
+## Holding a conversation
+
+The three harnesses continue a conversation two different ways, and the
+difference is exactly what `recovery` declares.
+
+**Pi is handed our log.** `transcriptFor` assigns `state.messages` from
+`context.history()` every activation, so the committed log is the only thing
+that decides what it knows. That is `recovery: "history"`, and it means an
+interrupted run can be picked up and finished.
+
+**Claude Code is handed its own name for the conversation.** Its context, its
+prompt cache and its own compaction live in the agent, so continuing means
+passing `resume` — the session id it reported when it started, kept in this
+session's metadata and given back next turn. That is `recovery: "none"`: what
+matters is over there, so our entries describe what happened without being able
+to put it back.
+
+Feeding it our log instead would have worked and was the other real option: it
+would make the log authoritative and survive the agent forgetting. It also
+means paying to re-send the whole conversation to an agent that already has it,
+every turn, and fighting the context management that is much of what buying
+into an SDK is for.
+
 ## Running the live tests
 
 Two gates, because `bun run check` is hermetic and a connected machine must not

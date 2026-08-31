@@ -20,7 +20,7 @@
  * it. A coding agent runs its own shell and delegates only the calls it
  * chooses to, so moving the process is the only way to move all of it.
  */
-import { runAgent, type Agent } from "aglib";
+import { runAgent, type Agent, type RunResult } from "aglib";
 import { renderRun, type Sink } from "aglib/render";
 import { createAcpHarness } from "aglib/harness/adapters/acp";
 import { createSqliteStore } from "aglib/store/adapters/sqlite";
@@ -71,9 +71,12 @@ function credentialsFor(row: AcpAgentRow): Record<string, string> {
   return out;
 }
 
+/** What an agent that keeps its own context is called over there. Ours to store, never ours to read. */
+interface VendorSession { vendorSessionId?: string }
+
 export async function main(
   task: string,
-  options: { choice?: Choice; sink?: Sink } = {},
+  options: { choice?: Choice; sink?: Sink; turns?: AsyncIterable<string> } = {},
 ): Promise<string> {
   const choice = options.choice ?? { agent: "claude-code", sandbox: "local" as const };
   // The answer on stdout, what the agent did on stderr.
@@ -90,7 +93,14 @@ export async function main(
   if (row.unavailable) throw new Error(`${row.title} is not available here: ${row.unavailable}`);
 
   const sandbox = await openSandbox(choice.sandbox);
-  const agent: Agent = {
+
+  // Captured while a run is in flight and written after it commits. The agent
+  // owns its context — that is what `recovery: "none"` means — so continuing a
+  // conversation is handing back the name it knows the conversation by, which
+  // the protocol answers with `session/load`.
+  let vendorSessionId: string | undefined;
+
+  const agentFor = (): Agent => ({
     id: `acp-${row.id}`,
     version: "1",
     // Recorded on the session, and deliberately not relied on: the protocol has
@@ -103,20 +113,44 @@ export async function main(
       sandbox,
       ...(row.mode ? { mode: row.mode } : {}),
       ...(choice.model ? { model: choice.model } : {}),
+      ...(vendorSessionId ? { resume: vendorSessionId } : {}),
+      onSession: (id) => { vendorSessionId = id; },
     }),
-  };
+  });
 
   const database = new Database(":memory:");
   const store = createSqliteStore({ database });
   const sessionId = crypto.randomUUID();
-  const result = await renderRun(runAgent({
-    agent, store, sessionId, key: "me",
-    // Orientation leads, because there is nowhere else for it to go.
-    input: `${orientation}\n\n${task}`,
-  }), sink);
+  let result: RunResult | undefined;
+  let first = true;
+  for await (const input of options.turns ?? [task]) {
+    // Rebuilt each turn, because `resume` is only known after the first one has
+    // told us what the agent calls this conversation.
+    result = await renderRun(runAgent({
+      agent: agentFor(), store, sessionId, key: "me",
+      // Orientation leads on the first turn, because there is nowhere else for
+      // it to go. Repeating it every turn would be the same words again to an
+      // agent that already has them.
+      input: first ? `${orientation}\n\n${input}` : input,
+    }), sink);
+    first = false;
+
+    // Written once the run has committed everything it is going to. Appending
+    // mid-run would race the harness for the session's position and lose.
+    if (vendorSessionId) {
+      const read = await store.read({ sessionId });
+      if (read.ok && (read.value.metadata as VendorSession | null)?.vendorSessionId !== vendorSessionId) {
+        await store.append({
+          sessionId, expectedSeq: read.value.seq, entries: [],
+          metadata: { vendorSessionId } satisfies VendorSession,
+        });
+      }
+    }
+  }
+
   await sandbox.close();
   await store.close();
-  if (result.status !== "completed") {
+  if (result && result.status !== "completed") {
     throw new Error(result.status === "failed" ? `run failed: ${result.error.message}` : `run ${result.status}`);
   }
   return sessionId;
