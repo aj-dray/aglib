@@ -126,6 +126,31 @@ means paying to re-send the whole conversation to an agent that already has it,
 every turn, and fighting the context management that is much of what buying
 into an SDK is for.
 
+## At the prompt
+
+```
+/model <name>              switch model, keeping the provider
+/model <provider> <name>   switch both — this may move the route, and the bridge with it
+/harness pi|claude-code    continue with a different loop
+/detail answer|normal|debug
+```
+
+Switching model works on both, and neither is a special case: Pi's model is a
+descriptor we build, and Claude Code supports it the way its own `/model` does.
+Both pay a cold prompt cache, and on Claude Code any thinking blocks from the
+previous model are dropped by the new one — silently, and unbilled.
+
+`/harness` is the one worth watching, because the two answers differ and the
+command says which you are about to get. Switch to **Pi** and it arrives knowing
+the conversation: its transcript is assigned from the committed log. Switch to
+**Claude Code** and it does not, because its context lives in the agent and a
+new one has none of this — `recovery: "none"`, at the moment it costs something.
+
+That is worth doing once rather than reading about. Asked a question about the
+turn before, a freshly started Claude Code did not say it had no idea; it
+answered with a number from somewhere else entirely. The warning names the
+consequence because the agent will not.
+
 ## Running the live tests
 
 Two gates, because `bun run check` is hermetic and a connected machine must not

@@ -68,6 +68,23 @@ Orientation leads the *first* turn only. The protocol has no system-prompt
 field, so it has nowhere else to go; repeating it every turn would be the same
 words again to an agent that already has them.
 
+## At the prompt
+
+```
+/model <name>   ask the agent to use a model it publishes
+/agent <id>     start a different agent
+/detail answer|normal|debug
+```
+
+`/model` is a request to the agent rather than a choice we make. Over the
+protocol a model is one of the options the agent publishes, so the adapter
+matches it against that agent's own selector and refuses by naming what it does
+offer. An agent that publishes none is told so plainly, with the suggestion to
+point it at a model through its environment instead.
+
+`/agent` starts a different one, which is a different conversation: it owns its
+context, and a new one has not seen this. The command says so first.
+
 ## Running the live test
 
 ```bash
