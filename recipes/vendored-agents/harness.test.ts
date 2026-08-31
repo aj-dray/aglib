@@ -256,3 +256,25 @@ liveTest("a session started by one harness is continued by another, through the 
   expect(textOf(theirs.output)).toContain("5150");
   await store.close();
 }, 300_000);
+
+test("switching harness says which answer you are about to get", async () => {
+  const said: string[] = [];
+  const sink = { write: (text: string) => said.push(text), status: (line: string) => said.push(line) };
+  const seen: string[] = [];
+
+  await main("", {
+    choice: { ...defaultChoice, harness: "pi" },
+    // No model is ever reached: every line here is a command.
+    turns: (async function* () { yield "/harness claude-code"; yield "/harness pi"; yield "/model openrouter"; })(),
+    model: { id: "unused", async *generate() { seen.push("asked"); throw new Error("no turn should reach a model"); } } as never,
+    sink,
+  });
+
+  const text = said.join("");
+  // The distinction this recipe exists for, said at the moment it bites.
+  expect(text).toContain("Claude Code keeps its own context");
+  expect(text).toContain("Pi reads the committed log");
+  // A provider with no model is a half-finished instruction.
+  expect(text).toContain("Name a model too");
+  expect(seen).toEqual([]);
+});

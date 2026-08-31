@@ -23,6 +23,7 @@
 import { runAgent, type Agent, type RunResult } from "aglib";
 import { renderRun, type Sink } from "aglib/render";
 import { terminalSink, turnsFrom } from "aglib/terminal";
+import { runCommand } from "./commands.ts";
 import { createAcpHarness } from "aglib/harness/adapters/acp";
 import { createSqliteStore } from "aglib/store/adapters/sqlite";
 import { createLocalSandboxProvider } from "aglib/sandbox/adapters/local";
@@ -82,11 +83,15 @@ export async function main(
   const choice = options.choice ?? { agent: "claude-code", sandbox: "local" as const };
   const sink: Sink = options.sink ?? terminalSink();
 
-  const row = acpAgentFor(choice.agent);
-  if (!row) throw new Error(`Unknown agent '${choice.agent}'. One of: ${acpAgents.map((a) => a.id).join(", ")}`);
-  // Reported before anything is started or billed. A row that says why it
-  // cannot run is more useful than one quietly missing from the list.
-  if (row.unavailable) throw new Error(`${row.title} is not available here: ${row.unavailable}`);
+  const rowFor = (id: string) => {
+    const found = acpAgentFor(id);
+    if (!found) throw new Error(`Unknown agent '${id}'. One of: ${acpAgents.map((a) => a.id).join(", ")}`);
+    // Reported before anything is started or billed. A row that says why it
+    // cannot run is more useful than one quietly missing from the list.
+    if (found.unavailable) throw new Error(`${found.title} is not available here: ${found.unavailable}`);
+    return found;
+  };
+  rowFor(choice.agent);
 
   const sandbox = await openSandbox(choice.sandbox);
 
@@ -97,7 +102,9 @@ export async function main(
   // question this recipe does not answer, because its store is in memory.
   let vendorSessionId: string | undefined;
 
-  const agentFor = (): Agent => ({
+  const agentFor = (): Agent => {
+    const row = rowFor(choice.agent);
+    return {
     id: `acp-${row.id}`,
     version: "1",
     // Recorded on the session, and deliberately not relied on: the protocol has
@@ -113,7 +120,8 @@ export async function main(
       ...(vendorSessionId ? { resume: vendorSessionId } : {}),
       onSession: (id) => { vendorSessionId = id; },
     }),
-  });
+  };
+  };
 
   const database = new Database(":memory:");
   const store = createSqliteStore({ database });

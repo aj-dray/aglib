@@ -17,6 +17,7 @@
 import { runAgent, type Agent, type RunResult } from "aglib";
 import { renderRun, type Sink } from "aglib/render";
 import { terminalSink, turnsFrom } from "aglib/terminal";
+import { runCommand } from "./commands.ts";
 import { createSqliteStore } from "aglib/store/adapters/sqlite";
 import { createOpenAiCompatibleModel, createOpenRouterModel } from "aglib/model/adapters/openai-compatible";
 import { createAnthropicModel } from "aglib/model/adapters/anthropic";
@@ -47,6 +48,8 @@ export interface Choice {
   model: string;
   effort?: "low" | "medium" | "high";
 }
+
+const say = (sink: Sink, text: string) => (sink.status ?? sink.write)(`${text}\n`);
 
 export const defaultChoice: Choice = {
   harness: "claude-code",
@@ -85,6 +88,20 @@ async function openSandbox(kind: Choice["sandbox"]): Promise<Sandbox> {
 }
 
 
+/**
+ * Where this harness's requests go, for the selection it has now.
+ *
+ * Rebuilt on a switch rather than made once: changing provider moves the
+ * endpoint, and may start or stop the bridge, so the route is as much a
+ * property of the selection as the model is.
+ */
+const routeFor = (choice: Choice, options: { model?: Model }) =>
+  (choice.harness === "pi" ? piRoute : anthropicRoute)({
+    provider: choice.provider,
+    model: () => options.model ?? createChosenModel(choice),
+    ...(choice.bridge ? { force: true } : {}),
+  });
+
 export async function main(
   task: string,
   options: { choice?: Choice; model?: Model; sink?: Sink; turns?: AsyncIterable<string> } = {},
@@ -96,11 +113,7 @@ export async function main(
   // Straight to the provider where one serves the wire, and through the bridge
   // only where none does. Both agents are told a base URL and a token either
   // way, and neither learns which of the three it got.
-  const route = (choice.harness === "pi" ? piRoute : anthropicRoute)({
-    provider: choice.provider,
-    model: () => options.model ?? createChosenModel(choice),
-    ...(choice.bridge ? { force: true } : {}),
-  });
+  let route = routeFor(choice, options);
 
   // Worth saying out loud: routing through the bridge costs prompt caching and
   // real token counts, and a reader should know which one they got.
@@ -163,6 +176,29 @@ export async function main(
   const sessionId = crypto.randomUUID();
   let result: RunResult | undefined;
   for await (const input of options.turns ?? [task]) {
+    const command = runCommand({ line: input, choice, sink });
+    if (command.handled) {
+      // Resolved before anything is committed to, and the old route closed only
+      // once the new one exists — a bridge left running is a listener nobody
+      // will stop.
+      if (command.model || command.harness) {
+        const proposed: Choice = { ...choice, ...(command.model ?? {}), ...(command.harness ? { harness: command.harness } : {}) };
+        try {
+          const next = routeFor(proposed, options);
+          await route.close();
+          route = next;
+          Object.assign(choice, proposed);
+          // A different vendor is a different conversation to that vendor, so
+          // what it was told about the last one goes with it.
+          vendorSessionId = undefined;
+          say(sink, `Answering with ${choice.harness} · ${choice.provider} · ${choice.model} · via ${route.via}, from the next turn.`);
+        } catch (error) {
+          say(sink, `Still ${choice.harness} · ${choice.provider} · ${choice.model}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      continue;
+    }
+
     // Rebuilt each turn, because `resume` is only known after the first one has
     // told us what the agent calls this conversation.
     result = await renderRun(runAgent({ agent: agentFor(), store, sessionId, key: "me", input }), sink);
