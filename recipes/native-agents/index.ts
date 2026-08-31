@@ -21,7 +21,7 @@ import { listSkills, renderSkillIndex, skillTools } from "./skills.ts";
 import { bashTools, openSandbox, type SandboxKind } from "./sandbox.ts";
 import { drain, isChild, reportToParent, spawnTools } from "./spawn.ts";
 import { createChosenModel, parseArguments, type Choice } from "./model.ts";
-import { turnsFrom, type TurnSource } from "./turns.ts";
+import { turnsFrom, type TurnSource } from "aglib/terminal";
 
 export interface Options {
   model?: Model;

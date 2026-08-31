@@ -16,6 +16,7 @@
  */
 import { runAgent, type Agent, type RunResult } from "aglib";
 import { renderRun, type Sink } from "aglib/render";
+import { turnsFrom } from "aglib/terminal";
 import { createSqliteStore } from "aglib/store/adapters/sqlite";
 import { createOpenAiCompatibleModel, createOpenRouterModel } from "aglib/model/adapters/openai-compatible";
 import { createAnthropicModel } from "aglib/model/adapters/anthropic";
@@ -38,6 +39,8 @@ export interface Choice {
   harness: HarnessId;
   tools: "ours" | "theirs" | "both";
   sandbox: "local" | "docker";
+  /** Answer once and exit, for someone at a terminal who wants the script behaviour. */
+  once?: boolean;
   provider: "openrouter" | "openai" | "anthropic";
   model: string;
   effort?: "low" | "medium" | "high";
@@ -186,12 +189,18 @@ export async function main(
 
 /** `--harness pi --tools both --sandbox docker` — everything else is the task. */
 export function parseArguments(argv: readonly string[]): { choice: Choice; task: string } {
+  // Flags taking no value must be named, or `--once "do the thing"` swallows
+  // the task as `once`'s argument and the agent is asked nothing.
+  const valueless = new Set(["once"]);
   const flags = new Map<string, string>();
   const words: string[] = [];
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]!;
-    if (argument.startsWith("--")) { flags.set(argument.slice(2), argv[index + 1] ?? ""); index += 1; }
-    else words.push(argument);
+    if (!argument.startsWith("--")) { words.push(argument); continue; }
+    const name = argument.slice(2);
+    if (valueless.has(name)) { flags.set(name, "true"); continue; }
+    flags.set(name, argv[index + 1] ?? "");
+    index += 1;
   }
   const harness = (flags.get("harness") ?? defaultChoice.harness) as HarnessId;
   if (!harnessIds.includes(harness)) {
@@ -207,6 +216,7 @@ export function parseArguments(argv: readonly string[]): { choice: Choice; task:
       provider: (flags.get("provider") ?? defaultChoice.provider) as Choice["provider"],
       model: flags.get("model") || defaultChoice.model,
       ...(effort ? { effort } : {}),
+      ...(flags.has("once") ? { once: true } : {}),
     },
     task: words.join(" "),
   };
@@ -215,6 +225,8 @@ export function parseArguments(argv: readonly string[]): { choice: Choice; task:
 if (import.meta.main) {
   const { choice, task } = parseArguments(process.argv.slice(2));
   console.error(`· ${choice.harness} · tools ${choice.tools} · sandbox ${choice.sandbox} · ${choice.provider} · ${choice.model}`);
-  await main(task, { choice });
+  // The same terminal every recipe here gets: a prompt for a person, one shot
+  // for a pipe, and the argv task as the first turn either way.
+  await main(task, { choice, turns: turnsFrom({ task, once: choice.once === true }).lines });
   console.log(recipeMarker("vendored-agents"));
 }

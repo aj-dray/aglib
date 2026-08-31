@@ -77,6 +77,10 @@ Every name a consumer can import, by entry point. What each one means belongs to
 
 `ConformanceCase` · `defineStoreConformance` · `StoreUnderTest`
 
+### `aglib/terminal`
+
+`turnsFrom` · `TurnSource`
+
 ### `aglib/tools`
 
 `Decide` · `defineTool` · `Tool` · `ToolContext` · `ToolExecutor` · `ToolSpec`

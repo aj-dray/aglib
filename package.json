@@ -31,6 +31,10 @@
       "types": "./dist/render.d.ts",
       "import": "./dist/render.js"
     },
+    "./terminal": {
+      "types": "./dist/terminal.d.ts",
+      "import": "./dist/terminal.js"
+    },
     "./session": {
       "types": "./dist/session/index.d.ts",
       "import": "./dist/session/index.js"

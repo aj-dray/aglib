@@ -87,6 +87,11 @@ async function runTurn(options: PiOptions, context: HarnessContext): Promise<Har
       return;
     }
     if (event.type === "message_end") {
+      // Pi ends *every* message, the user's included — and the user's is
+      // already an entry, committed by `runAgent` before this harness was
+      // called. Recording it again put the question in the log a second time,
+      // wearing the assistant's role, and made one exchange read as two turns.
+      if ((event.message as { role?: string }).role !== "assistant") return;
       const entry = assistantEntry(event.message, context);
       if (entry) await context.commit([entry]);
       return;
