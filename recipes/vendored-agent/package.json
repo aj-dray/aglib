@@ -1,0 +1,12 @@
+{
+  "name": "@aglib-recipe/vendored-agent",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "aglib": "file:../..",
+    "zod": "^4.4.3",
+    "@earendil-works/pi-agent-core": "^0.84.4",
+    "@earendil-works/pi-ai": "^0.84.4",
+    "@earendil-works/pi-coding-agent": "^0.84.4"
+  }
+}

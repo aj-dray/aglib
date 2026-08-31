@@ -1,0 +1,9 @@
+{
+  "name": "@aglib-recipe/native-agent",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "aglib": "file:../..",
+    "zod": "^4.4.3"
+  }
+}
