@@ -22,6 +22,7 @@
  */
 import { runAgent, type Agent, type RunResult } from "aglib";
 import { renderRun, type Sink } from "aglib/render";
+import { turnsFrom } from "aglib/terminal";
 import { createAcpHarness } from "aglib/harness/adapters/acp";
 import { createSqliteStore } from "aglib/store/adapters/sqlite";
 import { createLocalSandboxProvider } from "aglib/sandbox/adapters/local";
@@ -38,6 +39,8 @@ export const orientation =
 export interface Choice {
   agent: string;
   sandbox: "local" | "docker";
+  /** Answer once and exit, for someone at a terminal who wants the script behaviour. */
+  once?: boolean;
   model?: string;
 }
 
@@ -158,12 +161,18 @@ export async function main(
 
 /** `--agent codex --sandbox docker` — everything else is the task. */
 export function parseArguments(argv: readonly string[]): { choice: Choice; task: string } {
+  // Flags taking no value must be named, or `--once "do the thing"` swallows
+  // the task as `once`'s argument and the agent is asked nothing.
+  const valueless = new Set(["once"]);
   const flags = new Map<string, string>();
   const words: string[] = [];
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]!;
-    if (argument.startsWith("--")) { flags.set(argument.slice(2), argv[index + 1] ?? ""); index += 1; }
-    else words.push(argument);
+    if (!argument.startsWith("--")) { words.push(argument); continue; }
+    const name = argument.slice(2);
+    if (valueless.has(name)) { flags.set(name, "true"); continue; }
+    flags.set(name, argv[index + 1] ?? "");
+    index += 1;
   }
   const model = flags.get("model");
   return {
@@ -171,6 +180,7 @@ export function parseArguments(argv: readonly string[]): { choice: Choice; task:
       agent: flags.get("agent") ?? "claude-code",
       sandbox: (flags.get("sandbox") ?? "local") as Choice["sandbox"],
       ...(model ? { model } : {}),
+      ...(flags.has("once") ? { once: true } : {}),
     },
     task: words.join(" "),
   };
@@ -179,6 +189,6 @@ export function parseArguments(argv: readonly string[]): { choice: Choice; task:
 if (import.meta.main) {
   const { choice, task } = parseArguments(process.argv.slice(2));
   console.error(`· acp · ${choice.agent} · sandbox ${choice.sandbox}`);
-  await main(task, { choice });
+  await main(task, { choice, turns: turnsFrom({ task, once: choice.once === true }).lines });
   console.log(recipeMarker("coding-agents"));
 }

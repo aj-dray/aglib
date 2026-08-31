@@ -4,6 +4,7 @@ import { createSqliteStore } from "aglib/store/adapters/sqlite";
 import { runAgent, defineTool, textOf, type Agent } from "aglib";
 import { z } from "zod";
 import { createLocalSandboxProvider } from "aglib/sandbox/adapters/local";
+import { createNativeHarness } from "aglib/harness";
 import { createOpenRouterModel } from "aglib/model/adapters/openai-compatible";
 import { serveAnthropicWire } from "./wire.ts";
 import { createClaudeCodeHarness } from "./claude-code.ts";
@@ -205,5 +206,52 @@ liveTest("pi is put back where a killed worker left it, from our log alone", asy
 
   const after = await store.read({ sessionId: "s" });
   expect(after.ok && after.value.entries.filter((entry) => entry.type === "run.started")).toHaveLength(1);
+  await store.close();
+}, 300_000);
+
+/**
+ * What a normalised log is actually for.
+ *
+ * One session, two harnesses: our own loop answers the first turn, and Pi
+ * answers the second having never seen it happen. Nothing is translated and
+ * nothing is handed over — Pi reads the same committed entries our loop wrote,
+ * because there is only one representation of a conversation here.
+ *
+ * This is the property that does not hold for a harness whose context lives in
+ * the vendor. Swap Pi for Claude Code below and the second turn arrives at an
+ * agent with no idea what "that number" refers to, which is the whole content
+ * of `recovery: "none"`.
+ */
+liveTest("a session started by one harness is continued by another, through the log alone", async () => {
+  const wire = serveAnthropicWire({
+    model: createOpenRouterModel({ apiKey: live!, model: "anthropic/claude-sonnet-5", appName: "aglib-vendored-agents" }),
+  });
+  const store = createSqliteStore({ database: new Database(":memory:") });
+  const sessionId = crypto.randomUUID();
+  const instructions = "Be brief. Answer with as few words as possible.";
+
+  const ours = await runAgent({
+    agent: {
+      id: "t", version: "1", instructions,
+      harness: createNativeHarness({
+        model: createOpenRouterModel({ apiKey: live!, model: "anthropic/claude-sonnet-5", appName: "aglib-vendored-agents" }),
+      }),
+    },
+    store, sessionId, input: "Remember the number 5150. Reply with just: noted.",
+  }).result;
+  expect(ours.status).toBe("completed");
+
+  const theirs = await runAgent({
+    agent: {
+      id: "t", version: "1", instructions,
+      harness: createPiHarness({ baseUrl: wire.url, token: wire.token }),
+    },
+    store, sessionId, input: "What number did I ask you to remember? Reply with just the number.",
+  }).result;
+
+  await wire.close();
+  expect(theirs.status).toBe("completed");
+  if (theirs.status !== "completed") return;
+  expect(textOf(theirs.output)).toContain("5150");
   await store.close();
 }, 300_000);

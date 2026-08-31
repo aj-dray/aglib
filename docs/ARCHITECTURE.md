@@ -260,6 +260,45 @@ so a run can stream a paragraph and produce nothing deliverable. Showing that pa
 it is most of what debugging a run is — provided the outcome is stated rather than implied, which is
 why `finish` takes it from the result and not from whatever happened to stream.
 
+## What each route can and cannot do
+
+One table, because this is the question every application asks and the answer is
+easy to get wrong by hoping. What varies is not how much of the agent you get —
+all four run inside one log, one sandbox and one permission decision — but **who
+holds the conversation**.
+
+| | our loop | Pi, from its library | Claude Code, from its SDK | anything, over ACP |
+| --- | --- | --- | --- | --- |
+| System prompt | ours | ours | its preset, ours appended | **none** — orientation leads the first message |
+| Its own tools | none to have | **values we can import**, re-pointed at our sandbox | **names only** — enable or disable, never take | **cannot be removed**, only refused |
+| Our tools | the executor | the same executor | an in-process MCP server | an MCP server it connects to |
+| Transcript | the log | **assignable** — `state.messages` from the log | its own | its own |
+| Continues a conversation by | reading the log | reading the log | `resume`, its session id | `session/load`, its session id |
+| `recovery` | `history` | `history` | `none` | `none` |
+| Resumable from our log after a crash | **yes** | **yes** | no | no |
+| Handed to a different harness mid-session | **yes** | **yes** | no | no |
+
+The last two rows are the same fact twice, and it is the fact worth choosing on.
+Where a vendor exposes its transcript as something we assign, our log is the
+only thing that decides what the agent knows — so an interrupted run can be
+finished, and a session our loop began can be continued by Pi, which
+`recipes/vendored-agents` proves against a live model. Where the vendor keeps
+its own context, that context is a second copy we cannot write, and both of
+those become no.
+
+Nothing here can be improved by trying harder. The Claude Agent SDK and the
+protocol both accept a *user* turn or an instruction to load their own session,
+and neither accepts a conversation we assembled — their surface, not our design.
+It is not the log falling short either: a `ContentPart` of kind `opaque` exists
+so a provider's own blocks survive verbatim, ready to be handed back.
+
+There is one supported way it could change. The SDK takes a `sessionStore`, and
+`load()` returns whatever we give it, so a store that generated the SDK's
+entries from ours would be the translation. It is not built, and the reason is
+that `SessionStoreEntry` types the container and not the entries: their meaning
+is that SDK's internal transcript format, which is not a contract anyone has
+promised to keep.
+
 ## Deployment responsibilities
 
 The application owns process placement, worker count, restart policy and deployment; aglib spawns

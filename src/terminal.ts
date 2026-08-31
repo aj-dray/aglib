@@ -1,11 +1,17 @@
 /**
  * Where a person's turns come from.
  *
- * The inbound half of a terminal, and the sibling of `channel.ts`: that one
- * turns a mail thread into deliveries on a session, this one turns typing into
- * the same thing. Neither is a library concern — which session a person is
- * talking to is an application's decision, and for a terminal the answer is
- * "the one" and delivery is a pipe that cannot fail.
+ * The inbound half of the one channel this package ships, and `render` is the
+ * outbound half. A channel does three things — decide which session a person is
+ * talking to, deliver a message exactly once, and put the result in a medium's
+ * own shape. For a terminal the first is "the one session" and the second is a
+ * pipe that cannot fail, so the two halves collapse to a keyboard and a screen,
+ * and both are the same for every application. A mail bridge keeps all three
+ * and is yours; this is the degenerate case, which is why it can be here.
+ *
+ * It is the one file in `src` that touches `process`, and it is confined to
+ * that: `render` takes a sink, this takes a stream, and neither reaches for a
+ * terminal it was not handed.
  *
  * **Multi-turn is the default, and it is not a flag.** A conversation is what
  * this recipe is for, and one-shot is the special case — the one where nobody
@@ -18,9 +24,9 @@
  *     `recipe native-agents "…" > answer.txt` and `echo … | recipe` both behave
  *     the way every other command-line program does.
  *
- * `--once` overrides the first case for someone who has a terminal and wants
- * the script behaviour anyway. There is no flag for the reverse, because
- * prompting into a pipe would hang waiting for a person who is not there.
+ * `once` overrides the first case for someone who has a terminal and wants the
+ * script behaviour anyway. There is no flag for the reverse, because prompting
+ * into a pipe would wait for a person who is not there.
  */
 import { createInterface } from "node:readline";
 
