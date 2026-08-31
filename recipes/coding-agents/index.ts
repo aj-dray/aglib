@@ -22,7 +22,7 @@
  */
 import { runAgent, type Agent, type RunResult } from "aglib";
 import { renderRun, type Sink } from "aglib/render";
-import { turnsFrom } from "aglib/terminal";
+import { terminalSink, turnsFrom } from "aglib/terminal";
 import { createAcpHarness } from "aglib/harness/adapters/acp";
 import { createSqliteStore } from "aglib/store/adapters/sqlite";
 import { createLocalSandboxProvider } from "aglib/sandbox/adapters/local";
@@ -80,12 +80,7 @@ export async function main(
   options: { choice?: Choice; sink?: Sink; turns?: AsyncIterable<string> } = {},
 ): Promise<string> {
   const choice = options.choice ?? { agent: "claude-code", sandbox: "local" as const };
-  // The answer on stdout, what the agent did on stderr.
-  const sink: Sink = options.sink ?? {
-    write: (text) => process.stdout.write(text),
-    status: (line) => process.stderr.write(line),
-    tty: process.stderr.isTTY === true,
-  };
+  const sink: Sink = options.sink ?? terminalSink();
 
   const row = acpAgentFor(choice.agent);
   if (!row) throw new Error(`Unknown agent '${choice.agent}'. One of: ${acpAgents.map((a) => a.id).join(", ")}`);

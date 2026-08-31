@@ -71,5 +71,13 @@ words again to an agent that already has them.
 ## Running the live test
 
 ```bash
-AGLIB_LIVE_ACP=1 ANTHROPIC_BASE_URL=... ANTHROPIC_AUTH_TOKEN=... bun test recipes/coding-agents
+AGLIB_LIVE_ACP=1 \
+  ANTHROPIC_BASE_URL=https://openrouter.ai/api \
+  ANTHROPIC_AUTH_TOKEN=$OPENROUTER_API_KEY \
+  ANTHROPIC_API_KEY= \
+  bun test recipes/coding-agents
 ```
+
+That is the whole of pointing a protocol agent at a different provider: three
+environment names the row declares, and OpenRouter serving the wire the agent
+already speaks. Nothing translates anything.

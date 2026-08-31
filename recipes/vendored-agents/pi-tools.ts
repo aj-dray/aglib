@@ -20,32 +20,28 @@
  * authority, in our container — a stronger claim than either end of this
  * recipe could make alone.
  */
-import { createCodingTools } from "@earendil-works/pi-coding-agent";
+import {
+  createCodingTools,
+  type BashOperations, type EditOperations,
+  type ReadOperations, type ToolsOptions, type WriteOperations,
+} from "@earendil-works/pi-coding-agent";
 import { err, ok, type Tool, type ToolContext, type ToolResult } from "aglib";
 import type { JsonValue } from "aglib";
 import type { Sandbox } from "aglib/sandbox";
 import { z } from "zod";
 
-/** What Pi hands back. Read structurally: its generics are richer than this needs. */
-interface PiTool {
-  name: string;
-  description: string;
-  parameters: unknown;
-  execute(callId: string, params: unknown, signal?: AbortSignal): Promise<{
-    content: readonly { type?: string; text?: string }[];
-    details?: unknown;
-    isError?: boolean;
-  }>;
-}
-
 export function piCodingTools(sandbox: Sandbox): readonly Tool[] {
-  const theirs = createCodingTools(sandbox.root, {
+  const files = fileOperations(sandbox);
+  // Typed against Pi's own exported interfaces rather than cast past them. The
+  // casts that stood here hid the two defects below: an environment Pi supplied
+  // and we ignored, and a signal already aborted before the process started.
+  const options: ToolsOptions = {
     bash: { operations: bashOperations(sandbox) },
-    read: { operations: fileOperations(sandbox) },
-    write: { operations: fileOperations(sandbox) },
-    edit: { operations: fileOperations(sandbox) },
-  } as never) as unknown as readonly PiTool[];
-  return theirs.map(adopt);
+    read: { operations: files },
+    write: { operations: files },
+    edit: { operations: files },
+  };
+  return createCodingTools(sandbox.root, options).map(adopt);
 }
 
 /**
@@ -58,7 +54,7 @@ export function piCodingTools(sandbox: Sandbox): readonly Tool[] {
  * checker for the same document — so arguments are parsed before any authority
  * decision sees them, exactly as the port requires.
  */
-function adopt(tool: PiTool): Tool {
+function adopt(tool: ReturnType<typeof createCodingTools>[number]): Tool {
   const validator = z.fromJSONSchema(tool.parameters as never);
   return Object.freeze({
     spec: Object.freeze({
@@ -77,10 +73,16 @@ function adopt(tool: PiTool): Tool {
         run: async (context: ToolContext): Promise<ToolResult> => {
           const answered = await tool.execute(context.callId, parsed.data, context.signal);
           return {
-            content: answered.content.filter((part) => part.type === "text").map((part) => part.text ?? "").join("\n"),
+            content: answered.content
+              .filter((part): part is { type: "text"; text: string } => part.type === "text")
+              .map((part) => part.text)
+              .join("\n"),
             ...(answered.details !== undefined && answered.details !== null
               ? { details: answered.details as JsonValue } : {}),
-            ...(answered.isError ? { isError: true } : {}),
+            // No `isError` to read: Pi's tools throw on failure rather than
+            // encoding it in the result, and our executor turns a throw into an
+            // error result. The cast that used to sit here hid that, and read a
+            // field the type never had.
           };
         },
       });
@@ -89,14 +91,20 @@ function adopt(tool: PiTool): Tool {
 }
 
 /** Their shell, our box. `spawn` rather than `exec` because they stream. */
-function bashOperations(sandbox: Sandbox) {
+function bashOperations(sandbox: Sandbox): BashOperations {
   return {
-    exec: async (
-      command: string,
-      cwd: string,
-      options: { onData: (data: Buffer) => void; signal?: AbortSignal; timeout?: number },
-    ): Promise<{ exitCode: number | null }> => {
-      const started = await sandbox.spawn({ command: ["sh", "-c", command], cwd });
+    exec: async (command, cwd, options) => {
+      // Refused before anything is started. A caller that has already given up
+      // should not be charged for a container starting a process for it.
+      if (options.signal?.aborted) throw new Error("aborted");
+      const started = await sandbox.spawn({
+        command: ["sh", "-c", command],
+        cwd,
+        // Pi sets PI_* session variables here and its own tool guidance refers
+        // to them. Dropping them made that guidance describe an environment the
+        // command could not see.
+        ...(options.env ? { env: options.env as Record<string, string> } : {}),
+      });
       if (!started.ok) throw new Error(started.error.message);
       const process = started.value;
 
@@ -125,7 +133,7 @@ function bashOperations(sandbox: Sandbox) {
  * four methods and three are shared. A second copy per tool would be three
  * names for one fact.
  */
-function fileOperations(sandbox: Sandbox) {
+function fileOperations(sandbox: Sandbox): ReadOperations & WriteOperations & EditOperations {
   const read = async (path: string): Promise<Buffer> => {
     const file = await sandbox.readFile({ path });
     if (!file.ok) throw new Error(file.error.message);

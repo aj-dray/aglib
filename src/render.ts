@@ -145,15 +145,23 @@ function createRenderer(sink: Sink): Renderer {
   /** When each call started, so a result can say how long it took. */
   const clocks = new Map<string, number>();
   /**
-   * Characters written since the last assistant entry.
+   * What has been streamed since the last assistant entry.
    *
    * The harnesses disagree about deltas — our loop and Pi stream tokens, the
    * Claude Code SDK emits one delta per whole message, and a harness may emit
-   * none. The entry stream is the one channel every harness fills, so an
-   * assistant entry prints its text only when nothing streamed it first. Every
-   * harness renders; none renders twice.
+   * none at all. The entry stream is the one channel every harness fills, so
+   * the entry decides what is shown and the deltas decide how much of it
+   * already has been.
+   *
+   * The rule the port does not state, and this therefore does not assume:
+   * deltas preceding an assistant entry *ought* to concatenate to its text.
+   * Where they do, the remainder is printed and nothing appears twice. Where
+   * they are absent, the whole entry is printed. Where they are neither — a
+   * harness that streamed something else, or stopped halfway — the entry is
+   * printed in full on a fresh line, because showing a reader the same words
+   * twice is a smaller failure than silently dropping the half nobody streamed.
    */
-  let streamed = 0;
+  let streamed = "";
   let turns = 0;
   /** Whether the last thing written ended mid-line, so a status line can open a fresh one. */
   let open = false;
@@ -180,7 +188,7 @@ function createRenderer(sink: Sink): Renderer {
   const say = (text: string) => {
     stopTicker();
     if (thinking) { thinking = false; }
-    streamed += text.length;
+    streamed += text;
     if (!sink.label) {
       sink.write(text);
       open = !text.endsWith("\n");
@@ -211,8 +219,23 @@ function createRenderer(sink: Sink): Renderer {
     if (stored.type === "assistant") {
       turns += 1;
       const said = readable(stored.content);
-      if (said && streamed === 0) say(said.endsWith("\n") ? said : `${said}\n`);
-      streamed = 0;
+      if (said) {
+        const shown = streamed;
+        // Cleared first: `say` appends to it, and what matters is what had been
+        // streamed *before* this entry arrived.
+        streamed = "";
+        if (!shown) say(said.endsWith("\n") ? said : `${said}\n`);
+        else if (said.startsWith(shown)) {
+          const rest = said.slice(shown.length);
+          if (rest) say(rest.endsWith("\n") ? rest : `${rest}\n`);
+          else if (open) say("\n");
+        } else {
+          if (open) sink.write("\n");
+          say(said.endsWith("\n") ? said : `${said}\n`);
+        }
+      } else {
+        streamed = "";
+      }
       for (const call of stored.calls ?? []) {
         names.set(call.callId, call.name);
         line(dim(`→ ${call.name} ${oneLine(call.arguments, 72)}`));

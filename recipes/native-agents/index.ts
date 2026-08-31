@@ -21,7 +21,7 @@ import { listSkills, renderSkillIndex, skillTools } from "./skills.ts";
 import { bashTools, openSandbox, type SandboxKind } from "./sandbox.ts";
 import { drain, isChild, reportToParent, spawnTools } from "./spawn.ts";
 import { createChosenModel, parseArguments, type Choice } from "./model.ts";
-import { turnsFrom, type TurnSource } from "aglib/terminal";
+import { terminalSink, turnsFrom, type TurnSource } from "aglib/terminal";
 import { runCommand } from "./commands.ts";
 
 export interface Options {
@@ -48,14 +48,8 @@ const say = (sink: Sink, text: string) => (sink.status ?? sink.write)(`${text}\n
 export async function main(task: string, options: Options = {}): Promise<string> {
   const sessionId = options.sessionId ?? crypto.randomUUID();
   const turns = options.turns ?? turnsFrom({ task, once: options.choice?.once === true });
-  // The answer on stdout, the account of the run on stderr, so redirecting the
-  // first captures the answer and nothing else.
-  const sink: Sink = options.sink ?? {
-    write: (text) => process.stdout.write(text),
-    status: (line) => process.stderr.write(line),
-    tty: process.stderr.isTTY === true,
-    ...(choiceDetail(options.choice) ? { detail: choiceDetail(options.choice) } : {}),
-  };
+  const sink: Sink = options.sink
+    ?? terminalSink({ ...(choiceDetail(options.choice) ? { detail: choiceDetail(options.choice) } : {}) });
   const choice = options.choice ?? { provider: "openrouter" as const, model: "deepseek/deepseek-v4-flash", sandbox: "local" as const };
 
   const home = await openHome();

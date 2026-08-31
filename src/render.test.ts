@@ -192,3 +192,28 @@ test("a sink with nowhere to put the account drops it, rather than into the answ
     expect(answer.join("")).toBe("1250\n");
   });
 });
+
+test("a harness that streams only part of its turn still shows all of it", () => {
+  // The port does not promise that deltas concatenate to the entry, so this
+  // does not assume it. A prefix is completed rather than counted as the whole.
+  const { sink, answer } = harness();
+  return renderRun(runOf([
+    { type: "text.delta", text: "The balance " },
+    at({ type: "assistant", runId: "r", content: "The balance is 1250." }),
+  ]), sink).then(() => {
+    expect(answer.join("")).toBe("The balance is 1250.\n");
+  });
+});
+
+test("a harness that streams something other than its turn shows both, not neither", () => {
+  // Repeating a reader's words is a smaller failure than dropping the half
+  // nobody streamed, so a mismatch prints the committed entry whole.
+  const { sink, answer } = harness();
+  return renderRun(runOf([
+    { type: "text.delta", text: "thinking out loud" },
+    at({ type: "assistant", runId: "r", content: "1250." }),
+  ]), sink).then(() => {
+    expect(answer.join("")).toContain("thinking out loud");
+    expect(answer.join("")).toContain("1250.");
+  });
+});

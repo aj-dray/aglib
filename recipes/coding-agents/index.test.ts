@@ -59,5 +59,5 @@ liveTest("an agent started inside the sandbox lands in our log", async () => {
     choice: { agent: "claude-code", sandbox: "local" },
     sink: { write: (text) => said.push(text), status: () => {} },
   });
-  expect(said.join(" ").toLowerCase()).toContain("pineapple");
+  expect(said.join("").toLowerCase()).toContain("pineapple");
 }, 400_000);

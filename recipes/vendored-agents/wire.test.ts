@@ -95,5 +95,5 @@ liveTest("the Claude Agent SDK runs on a model behind the port", async () => {
 
   await wire.close();
   expect(failed).toBeUndefined();
-  expect(said.join(" ").toLowerCase()).toContain("pineapple");
+  expect(said.join("").toLowerCase()).toContain("pineapple");
 }, 180_000);
