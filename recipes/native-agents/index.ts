@@ -25,7 +25,12 @@ import { turnsFrom, type TurnSource } from "aglib/terminal";
 import { runCommand } from "./commands.ts";
 
 export interface Options {
-  model?: Model;
+  /**
+   * How a selection becomes a model. Defaults to reading a credential from the
+   * environment; a test returns a fake and can still exercise `/model`, which a
+   * fixed `Model` could not — it would announce a switch and change nothing.
+   */
+  resolveModel?: (choice: Choice) => Model;
   choice?: Choice;
   sessionId?: string;
   /** Where the run is shown. A test passes one that captures instead of printing. */
@@ -35,6 +40,8 @@ export interface Options {
 }
 
 const choiceDetail = (choice: Choice | undefined): Sink["detail"] | undefined => choice?.detail;
+
+const say = (sink: Sink, text: string) => (sink.status ?? sink.write)(`${text}\n`);
 
 export async function main(task: string, options: Options = {}): Promise<string> {
   const sessionId = options.sessionId ?? crypto.randomUUID();
@@ -58,7 +65,8 @@ export async function main(task: string, options: Options = {}): Promise<string>
   // Rebuilt when `/model` changes the choice. A model is a value, not a name
   // the library resolves, so a different one is a different `Model` — and a
   // different harness, and a different agent.
-  let model = options.model ?? createChosenModel(choice);
+  const resolveModel = options.resolveModel ?? createChosenModel;
+  let model = resolveModel(choice);
   const sandbox = await openSandbox(choice.sandbox as SandboxKind);
 
   const instructions = await Bun.file(home.instructions).text().catch(() => defaultInstructions);
@@ -90,15 +98,16 @@ export async function main(task: string, options: Options = {}): Promise<string>
   const tools = [...hands, ...memoryTools(home.memory), ...spawnTools({ store, agent: identity })];
   let parent: Agent = { ...identity, instructions, harness: harness(), tools };
 
-  // Run-scoped: inside the cached prefix, fixed for the whole run. A memory
-  // written this run applies from the next one, because rewriting the prefix
-  // mid-run would invalidate the cache on every turn after it.
-  const context = {
+  // Run-scoped: inside the cached prefix, fixed for the whole *run*, and read
+  // again for the next one. Built once for the whole process it was neither —
+  // a fact remembered on the first turn stayed invisible until a restart,
+  // which is the opposite of what the memory tool promises.
+  const contextFor = async () => ({
     run: [
       renderMemory(await readMemory(home.memory)),
       renderSkillIndex(await listSkills(home.skills)),
     ].join("\n\n"),
-  };
+  });
 
   // One session for every turn, which is what makes this a conversation rather
   // than a series of strangers — and the only way the compaction this agent
@@ -109,18 +118,28 @@ export async function main(task: string, options: Options = {}): Promise<string>
     // reaches the log.
     const command = runCommand({ line: input, choice, sink });
     if (command.handled) {
-      if (command.changed) {
-        model = options.model ?? createChosenModel(choice);
-        // The subagent too: a child spawned after the switch should run on the
-        // model that is answering now, not the one that was.
-        parent = { ...identity, instructions, harness: harness(), tools };
-        child = { ...child, harness: harness() };
+      // Resolved before anything is committed to, so a missing credential says
+      // so and leaves the session answering with what it had.
+      if (command.select) {
+        const proposed = { ...choice, ...command.select };
+        try {
+          model = resolveModel(proposed);
+          Object.assign(choice, command.select);
+          // The subagent too: a child spawned after the switch should run on
+          // the model that is answering now, not the one that was.
+          parent = { ...identity, instructions, harness: harness(), tools };
+          child = { ...child, harness: harness() };
+          say(sink, `Answering with ${choice.provider} · ${choice.model} from the next turn.`);
+          say(sink, "The prompt cache starts again from there.");
+        } catch (error) {
+          say(sink, `Still ${choice.provider} · ${choice.model}: ${error instanceof Error ? error.message : String(error)}`);
+        }
       }
       continue;
     }
 
     last = await renderRun(
-      runAgent({ agent: parent, store, sessionId, key: "me", input, context }),
+      runAgent({ agent: parent, store, sessionId, key: "me", input, context: await contextFor() }),
       sink,
     );
 

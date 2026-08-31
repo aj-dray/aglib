@@ -12,8 +12,14 @@ import { providers, type Choice } from "./model.ts";
 export interface CommandResult {
   /** Whether the line was a command, and so is not a turn for the agent. */
   handled: boolean;
-  /** Set when the model changed, so the caller rebuilds what holds it. */
-  changed?: boolean;
+  /**
+   * What was asked for, when a model was named. Proposed rather than applied:
+   * this cannot know whether the credential for that provider exists, so the
+   * caller resolves it first and only then commits — otherwise a typo announces
+   * a switch, mutates the selection, and leaves the session answering with
+   * something it has already said it is not.
+   */
+  select?: { provider: Choice["provider"]; model: string };
 }
 
 const help = [
@@ -58,19 +64,16 @@ export function runCommand(input: {
   // `/model <provider> <name>` when the first word names one, `/model <name>`
   // otherwise — so switching within a provider costs one word.
   const named = rest[0] as Choice["provider"];
-  const provider = providers.includes(named) && rest.length > 1 ? named : input.choice.provider;
-  const model = (providers.includes(named) && rest.length > 1 ? rest.slice(1) : rest).join(" ");
+  const namesProvider = providers.includes(named);
+  // A lone provider name is a half-finished instruction, not a model called
+  // `openrouter`. Saying so beats switching to something that does not exist.
+  if (namesProvider && rest.length === 1) {
+    say(`Name a model too — '/model ${named} <model>'.`);
+    return { handled: true };
+  }
+  const provider = namesProvider ? named : input.choice.provider;
+  const model = (namesProvider ? rest.slice(1) : rest).join(" ");
   if (!model) { say("Give a model name."); return { handled: true }; }
 
-  input.choice.provider = provider;
-  input.choice.model = model;
-  // A model is a value here, not a name the library resolves, so switching one
-  // means building a different `Model` — and the harness that holds it. The
-  // next turn does that; this one only records the choice.
-  say(`Answering with ${provider} · ${model} from the next turn.`);
-  // The cached prefix is scoped to the model that built it, so the turn after
-  // this pays full price for the instructions and context again. Said plainly
-  // because the alternative is someone finding it on an invoice.
-  say("The prompt cache starts again from there.");
-  return { handled: true, changed: true };
+  return { handled: true, select: { provider, model } };
 }
