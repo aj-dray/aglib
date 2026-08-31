@@ -34,7 +34,7 @@ const call = (name: string, args: unknown) =>
 test("a remembered fact is on disk, and is context for the next conversation", async () => {
   await withHome(async (home) => {
     await main("Remember I prefer metric units.", {
-      model: createFakeModel([
+      resolveModel: () => createFakeModel([
         call("memory", { action: "add", text: "Prefers metric units." }),
         { text: "Noted." },
       ]),
@@ -52,7 +52,7 @@ test("a write over budget changes nothing and hands back what is there", async (
   await withHome(async (home) => {
     await Bun.write(join(home, "memory.md"), "An entry worth keeping.");
     await main("remember something enormous", {
-      model: createFakeModel([
+      resolveModel: () => createFakeModel([
         call("memory", { action: "add", text: "x".repeat(memoryBudget) }),
         { text: "It did not fit." },
       ]),
@@ -68,7 +68,7 @@ test("a spawned subagent runs from the queue, and its report reaches the parent"
   await withHome(async (home) => {
     const said: string[] = [];
     const sessionId = await main("Find out what is in the ledger.", {
-      model: createFakeModel([
+      resolveModel: () => createFakeModel([
         // The parent hands the task off and ends its turn. The delivery is
         // committed by the same write that commits this call.
         call("spawn", { goal: "Read the September ledger and report the balance.", context: "" }),
@@ -148,7 +148,7 @@ test("a conversation is one session, and a script is one shot", async () => {
         interactive: true,
         lines: (async function* () { yield "remember I like metric"; yield "what did I just say?"; })(),
       },
-      model: createFakeModel([
+      resolveModel: () => createFakeModel([
         call("memory", { action: "add", text: "Likes metric units." }),
         { text: "Noted." },
         { text: "You said you like metric." },
@@ -177,7 +177,7 @@ test("a slash line is for the terminal, and never reaches the agent", async () =
         interactive: true,
         lines: (async function* () { yield "/model"; yield "/nonsense"; yield "hello"; })(),
       },
-      model: createFakeModel([{ text: "hi" }]),
+      resolveModel: () => createFakeModel([{ text: "hi" }]),
       sink: { write: (text) => said.push(text), status: (line) => said.push(line) },
     });
 
@@ -192,5 +192,68 @@ test("a slash line is for the terminal, and never reaches the agent", async () =
       .filter((entry) => entry.type === "run.started");
     expect(starts).toHaveLength(1);
     expect(JSON.stringify(starts)).not.toContain("/model");
+  });
+});
+
+test("a switch that cannot be made is refused, and the session keeps answering", async () => {
+  await withHome(async () => {
+    const said: string[] = [];
+    await main("", {
+      turns: {
+        interactive: true,
+        lines: (async function* () { yield "/model openrouter"; yield "/model nope/model"; yield "hello"; })(),
+      },
+      // Every selection but the one we started with is unavailable, the way a
+      // missing credential is unavailable.
+      resolveModel: (choice) => {
+        if (choice.model !== "deepseek/deepseek-v4-flash") throw new Error("OPENROUTER_API_KEY is not set");
+        return createFakeModel([{ text: "hi" }]);
+      },
+      sink: { write: (text) => said.push(text), status: (line) => said.push(line) },
+    });
+
+    const text = said.join("");
+    // A provider with no model is a half-finished instruction, not a model.
+    expect(text).toContain("Name a model too");
+    // A switch that could not be resolved says what is still answering, and
+    // never claims the change happened.
+    expect(text).toContain("Still openrouter · deepseek/deepseek-v4-flash");
+    expect(text).not.toContain("Answering with openrouter · nope/model from the next turn");
+    // And the run after it still works, on the model that was there all along.
+    expect(text).toContain("hi");
+  });
+});
+
+test("a fact remembered on one turn is context on the next, not after a restart", async () => {
+  await withHome(async () => {
+    const asked: string[] = [];
+    const scripted = createFakeModel([
+      call("memory", { action: "add", text: "Ledger lives in ~/ledgers." }),
+      { text: "Noted." },
+      { text: "In ~/ledgers." },
+    ]);
+    // Records what each request was shown, then answers from the script.
+    const watching = {
+      id: "watching",
+      async *generate(request: { messages: readonly { role: string; content: unknown }[] }) {
+        asked.push(JSON.stringify(request.messages.filter((message) => message.role === "system")));
+        return yield* scripted.generate(request as never);
+      },
+    };
+
+    await main("", {
+      turns: {
+        interactive: true,
+        lines: (async function* () { yield "remember where the ledger is"; yield "where is it?"; })(),
+      },
+      resolveModel: () => watching as never,
+      sink: { write: () => {}, status: () => {} },
+    });
+
+    // The first turn was shown an empty memory; the last was shown the fact the
+    // first one wrote. Built once for the whole process, every turn saw the
+    // empty one and the memory tool was a promise nothing kept.
+    expect(asked[0]).toContain("nothing recorded");
+    expect(asked.at(-1)).toContain("Ledger lives in ~/ledgers.");
   });
 });

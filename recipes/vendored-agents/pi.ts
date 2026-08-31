@@ -21,7 +21,7 @@ import { Agent } from "@earendil-works/pi-agent-core";
 // The stream function is pi's own: it speaks the wire the descriptor names.
 import { streamSimple } from "@earendil-works/pi-ai/compat";
 import type { Harness, HarnessContext, HarnessResult } from "aglib/harness";
-import type { Entry, ToolCall } from "aglib/session";
+import type { Entry, ToolCall, Usage } from "aglib/session";
 import { textOf } from "aglib";
 import type { ToolExecutor } from "aglib";
 
@@ -109,7 +109,13 @@ async function runTurn(options: PiOptions, context: HarnessContext): Promise<Har
   });
 
   try {
-    await agent.prompt(inputFor(context));
+    // `continue()` rather than `prompt()`: the transcript assigned above was
+    // built from the committed log, and that log already contains this turn's
+    // input — `runAgent` commits `run.started` before any harness runs.
+    // Prompting would send the question a second time, after the tool result
+    // it was supposed to precede, and a resumption would replay the original
+    // question on top of work already done.
+    await agent.continue();
     await agent.waitForIdle();
   } catch (error) {
     if (context.signal.aborted) return { status: "cancelled" };
@@ -187,10 +193,34 @@ function assistantEntry(message: unknown, context: HarnessContext): Entry | unde
   const said = textFrom(message);
   const calls = callsFrom(message);
   if (!said && !calls.length) return undefined;
+  const spent = usageFrom(message);
   return {
     type: "assistant", runId: context.runId, content: said,
     ...(calls.length ? { calls } : {}),
+    ...(spent ? { usage: spent } : {}),
   };
+}
+
+/**
+ * What the generation cost, in our vocabulary.
+ *
+ * Pi reports `input` already net of cache, like the Anthropic wire and unlike
+ * OpenAI's, so the three counts stay disjoint without arithmetic. An absent
+ * count stays absent: a number nobody reported is not a zero, and a run this
+ * harness cannot price should say so rather than claim it was free.
+ */
+function usageFrom(message: unknown): Usage | undefined {
+  const reported = (message as { usage?: Record<string, unknown> }).usage;
+  if (!reported) return undefined;
+  const count = (key: string): number | undefined =>
+    typeof reported[key] === "number" ? reported[key] : undefined;
+  const spent: Usage = {
+    ...(count("input") !== undefined ? { inputTokens: count("input")! } : {}),
+    ...(count("output") !== undefined ? { outputTokens: count("output")! } : {}),
+    ...(count("cacheRead") ? { cacheReadTokens: count("cacheRead")! } : {}),
+    ...(count("cacheWrite") ? { cacheWriteTokens: count("cacheWrite")! } : {}),
+  };
+  return Object.keys(spent).length ? spent : undefined;
 }
 
 interface PiContent { type?: string; text?: string; id?: string; name?: string; arguments?: unknown }
@@ -211,17 +241,17 @@ const callsFrom = (message: unknown): ToolCall[] =>
       arguments: JSON.stringify(part.arguments ?? {}),
     }));
 
+/**
+ * A text fragment, in Pi's shape.
+ *
+ * `delta` is the string itself on a `text_delta`, not an object holding one.
+ * Read as `delta.text` it was always undefined, so nothing ever streamed and
+ * every answer arrived through the renderer's committed-entry fallback.
+ */
 const deltaOf = (event: unknown): string => {
-  const shape = event as { type?: string; delta?: { text?: string }; text?: string };
-  if (shape.delta?.text) return shape.delta.text;
-  return "";
+  const shape = event as { type?: string; delta?: unknown };
+  return shape.type === "text_delta" && typeof shape.delta === "string" ? shape.delta : "";
 };
 
 const safeJson = (raw: string): unknown => { try { return JSON.parse(raw); } catch { return {}; } };
 
-/** This activation's input: the entries `runAgent` committed before calling us. */
-const inputFor = (context: HarnessContext): string =>
-  context.entries()
-    .filter((entry) => entry.type === "run.started" && entry.runId === context.runId)
-    .map((entry) => textOf((entry as Extract<Entry, { type: "run.started" }>).input))
-    .join("\n\n");
