@@ -16,7 +16,7 @@
  */
 import { runAgent, type Agent, type RunResult } from "aglib";
 import { renderRun, type Sink } from "aglib/render";
-import { turnsFrom } from "aglib/terminal";
+import { terminalSink, turnsFrom } from "aglib/terminal";
 import { createSqliteStore } from "aglib/store/adapters/sqlite";
 import { createOpenAiCompatibleModel, createOpenRouterModel } from "aglib/model/adapters/openai-compatible";
 import { createAnthropicModel } from "aglib/model/adapters/anthropic";
@@ -90,12 +90,7 @@ export async function main(
   options: { choice?: Choice; model?: Model; sink?: Sink; turns?: AsyncIterable<string> } = {},
 ): Promise<string> {
   const choice = options.choice ?? defaultChoice;
-  // The answer on stdout, what the agent did on stderr.
-  const sink: Sink = options.sink ?? {
-    write: (text) => process.stdout.write(text),
-    status: (line) => process.stderr.write(line),
-    tty: process.stderr.isTTY === true,
-  };
+  const sink: Sink = options.sink ?? terminalSink();
   const sandbox = await openSandbox(choice.sandbox);
 
   // Straight to the provider where one serves the wire, and through the bridge

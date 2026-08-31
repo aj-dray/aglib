@@ -29,6 +29,7 @@
  * into a pipe would wait for a person who is not there.
  */
 import { createInterface } from "node:readline";
+import type { Sink } from "./render.js";
 
 export interface TurnSource {
   /** Whether a person is waiting, which decides prompting and how a failure ends. */
@@ -79,5 +80,21 @@ export function turnsFrom(input: {
       }
       reader.close();
     })(),
+  };
+}
+
+/**
+ * The standard pair of channels for a terminal.
+ *
+ * The answer on stdout, the account of the run on stderr, so redirecting the
+ * first captures the answer and nothing else. Written out identically in three
+ * recipes before this existed, which is two more copies than a fact deserves.
+ */
+export function terminalSink(options: { detail?: Sink["detail"] } = {}): Sink {
+  return {
+    write: (text) => process.stdout.write(text),
+    status: (line) => process.stderr.write(line),
+    tty: process.stderr.isTTY === true,
+    ...(options.detail ? { detail: options.detail } : {}),
   };
 }

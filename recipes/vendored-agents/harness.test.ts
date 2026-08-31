@@ -124,7 +124,7 @@ liveTest("claude-code remembers the turn before, because it is handed its own se
     })(),
     sink: { write: (text) => said.push(text), status: () => {} },
   });
-  expect(said.join(" ")).toContain("4127");
+  expect(said.join("")).toContain("4127");
 }, 300_000);
 
 liveTest("pi remembers the turn before, from the log rather than its own memory", async () => {
@@ -137,7 +137,7 @@ liveTest("pi remembers the turn before, from the log rather than its own memory"
     })(),
     sink: { write: (text) => said.push(text), status: () => {} },
   });
-  expect(said.join(" ")).toContain("8315");
+  expect(said.join("")).toContain("8315");
 }, 300_000);
 
 /**
@@ -201,7 +201,8 @@ liveTest("pi is put back where a killed worker left it, from our log alone", asy
   if (result.status !== "completed") return;
   // It answered from a tool call it never made, because the log told it the
   // answer was already given. Re-running the effect would have been the bug.
-  expect(textOf(result.output)).toContain("1250");
+  // Commas stripped: a model is free to write the number the way a person would.
+  expect(textOf(result.output).replace(/,/g, "")).toContain("1250");
   expect(ran).toBe(0);
 
   const after = await store.read({ sessionId: "s" });

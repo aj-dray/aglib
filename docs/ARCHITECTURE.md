@@ -47,11 +47,19 @@ harness nothing of stores.
 | `model` | How do I reach a provider? One streaming method, one model, one credential; a caller wanting the whole response drains it. Choosing a model is choosing a `Model`, never naming one. |
 | `store` | Where does the log live, and what is owed? Create, read, append-with-`expectedSeq`, list, next, interrupted, close — and `watch`, where the store has a way to push. |
 | `sandbox` | Where do commands run? Isolation is requested and either enforced or refused, and a credential is given as a `Secret` whose fate the sandbox reports. |
-| `harness` | How does one activation reason and act? Two facts: whose tools, and can it resume from history. |
+| `harness` | How does one activation reason and act? One fact: can it resume from history. |
 
-**Two facts, not eight.** A caller only ever needs to know whether its tools are used and whether an
-interrupted activation can restart from the log. Everything a larger capability matrix carried was
-optional output, another subsystem, or a question nobody asked.
+**One fact, not eight.** A caller only ever needs to know whether an interrupted activation can
+restart from the log, and `run.ts` is the consumer — it closes a session no harness can continue
+rather than handing it out for ever. Everything a larger capability matrix carried was optional
+output, another subsystem, or a question nobody asked.
+
+There were two until recently. `toolUse` claimed to say whose tools ran, and it went because it
+answered none of the three questions it was conflating — whose tools, whose code, whose authority —
+reliably. A harness can run a *vendor's* tools through our executor, and can run tools *we wrote*
+inside its own process; the table under "What each route can and cannot do" says both accurately,
+and nothing branched on the enum. Should authorization provenance ever be needed, it is a fact about
+a call and belongs on the tool entry, not back on the harness.
 
 ## Concurrency
 

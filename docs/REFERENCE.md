@@ -75,7 +75,7 @@ Every name a consumer can import, by entry point. What each one means belongs to
 
 ### `aglib/terminal`
 
-`turnsFrom` · `TurnSource`
+`terminalSink` · `turnsFrom` · `TurnSource`
 
 ### `aglib/tools`
 
