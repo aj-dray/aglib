@@ -22,6 +22,7 @@ import { bashTools, openSandbox, type SandboxKind } from "./sandbox.ts";
 import { drain, isChild, reportToParent, spawnTools } from "./spawn.ts";
 import { createChosenModel, parseArguments, type Choice } from "./model.ts";
 import { turnsFrom, type TurnSource } from "aglib/terminal";
+import { runCommand } from "./commands.ts";
 
 export interface Options {
   model?: Model;
@@ -54,7 +55,10 @@ export async function main(task: string, options: Options = {}): Promise<string>
   database.exec("PRAGMA journal_mode = WAL");
   const store = createSqliteStore({ database });
 
-  const model = options.model ?? createChosenModel(choice);
+  // Rebuilt when `/model` changes the choice. A model is a value, not a name
+  // the library resolves, so a different one is a different `Model` — and a
+  // different harness, and a different agent.
+  let model = options.model ?? createChosenModel(choice);
   const sandbox = await openSandbox(choice.sandbox as SandboxKind);
 
   const instructions = await Bun.file(home.instructions).text().catch(() => defaultInstructions);
@@ -75,7 +79,7 @@ export async function main(task: string, options: Options = {}): Promise<string>
    * conversation learned is not rewritten by a task it handed off). What it
    * gains is `finished`, which is how its answer gets home.
    */
-  const child: Agent = {
+  let child: Agent = {
     ...identity,
     instructions: `${instructions}\n\nYou are a subagent. Do exactly what you were asked and report the result.`,
     harness: harness(),
@@ -83,12 +87,8 @@ export async function main(task: string, options: Options = {}): Promise<string>
     finished: (run) => reportToParent({ store, sessionId: run.sessionId, output: textOf(run.output) }),
   };
 
-  const parent: Agent = {
-    ...identity,
-    instructions,
-    harness: harness(),
-    tools: [...hands, ...memoryTools(home.memory), ...spawnTools({ store, agent: identity })],
-  };
+  const tools = [...hands, ...memoryTools(home.memory), ...spawnTools({ store, agent: identity })];
+  let parent: Agent = { ...identity, instructions, harness: harness(), tools };
 
   // Run-scoped: inside the cached prefix, fixed for the whole run. A memory
   // written this run applies from the next one, because rewriting the prefix
@@ -105,6 +105,20 @@ export async function main(task: string, options: Options = {}): Promise<string>
   // configures is ever reached.
   let last: RunResult | undefined;
   for await (const input of turns.lines) {
+    // A line beginning with `/` is for the terminal, not the agent, and never
+    // reaches the log.
+    const command = runCommand({ line: input, choice, sink });
+    if (command.handled) {
+      if (command.changed) {
+        model = options.model ?? createChosenModel(choice);
+        // The subagent too: a child spawned after the switch should run on the
+        // model that is answering now, not the one that was.
+        parent = { ...identity, instructions, harness: harness(), tools };
+        child = { ...child, harness: harness() };
+      }
+      continue;
+    }
+
     last = await renderRun(
       runAgent({ agent: parent, store, sessionId, key: "me", input, context }),
       sink,
