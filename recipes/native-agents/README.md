@@ -5,9 +5,34 @@ real assistant: our own loop, one hand, a memory it edits, skills it loads,
 subagents it hands work to, and a choice of where commands run.
 
 ```bash
+bun run recipe native-agents                     # a conversation
 bun run recipe native-agents "what did I decide about pricing?"
-bun run recipe native-agents --sandbox docker "check the disk usage in here"
+bun run recipe native-agents --sandbox docker --detail debug "check the disk usage"
+echo "how many sessions do I have?" | bun run recipe native-agents > answer.txt
 ```
+
+## Multi-turn is the default, and it is not a flag
+
+A conversation is what this recipe is for; one shot is the special case — the
+one where nobody is there. So the fact that decides it is whether stdin is a
+terminal, which is the same rule every other command-line program follows:
+
+- **A person at a terminal** gets a prompt, and a task on argv is simply their
+  first turn. Every turn runs against the same session, which is what makes it
+  a conversation rather than a series of strangers — and the only way the
+  120,000-token compaction budget below is ever reached.
+- **A pipe or a redirect** gets one shot and an exit code, so this composes with
+  everything else on the command line.
+
+`--once` overrides the first case for someone who has a terminal and wants the
+script behaviour anyway. There is no flag for the reverse, because prompting
+into a pipe would wait for a person who is not there.
+
+`--detail answer | normal | debug` decides how much of the run you see. The
+answer always goes to stdout and everything else to stderr, so redirecting
+captures the answer alone. `debug` adds reasoning, arguments as they form, and
+the structured `details` a tool returned — including a cancelled run's partial
+text, which is most of what debugging one is.
 
 ## What it demonstrates
 

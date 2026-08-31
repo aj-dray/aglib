@@ -6,6 +6,7 @@ import { Database } from "bun:sqlite";
 import { createFakeModel } from "aglib/model/adapters/fake";
 import { createSqliteStore } from "aglib/store/adapters/sqlite";
 import { main } from "./index.ts";
+import { parseArguments } from "./model.ts";
 import { receive } from "./channel.ts";
 import { memoryBudget, parseMemory, renderMemory } from "./memory.ts";
 
@@ -128,5 +129,42 @@ test("a channel maps a thread onto one session, and the worker answers it", asyn
       "Any update?",
     ]);
     await store.close();
+  });
+});
+
+test("a flag that takes no value does not swallow the task", () => {
+  const { choice, task } = parseArguments(["--once", "count the files", "--detail", "debug"]);
+  expect(choice.once).toBe(true);
+  expect(choice.detail).toBe("debug");
+  expect(task).toBe("count the files");
+});
+
+test("a conversation is one session, and a script is one shot", async () => {
+  await withHome(async (home) => {
+    const said: string[] = [];
+    const sessionId = await main("", {
+      // Two turns typed by a person, against one session.
+      turns: {
+        interactive: true,
+        lines: (async function* () { yield "remember I like metric"; yield "what did I just say?"; })(),
+      },
+      model: createFakeModel([
+        call("memory", { action: "add", text: "Likes metric units." }),
+        { text: "Noted." },
+        { text: "You said you like metric." },
+      ]),
+      sink: { write: (text) => said.push(text), status: () => {} },
+    });
+
+    const database = new Database(join(home, "agent.db"));
+    const sessions = database.query("SELECT id FROM sessions").all() as { id: string }[];
+    // One session, not two: the second turn continued the first.
+    expect(sessions.map((row) => row.id)).toEqual([sessionId]);
+
+    const starts = (database.query("SELECT body FROM entries WHERE session_id = ? ORDER BY seq").all(sessionId) as { body: string }[])
+      .map((row) => JSON.parse(row.body) as { type: string })
+      .filter((entry) => entry.type === "run.started");
+    expect(starts).toHaveLength(2);
+    expect(said.join("")).toContain("You said you like metric.");
   });
 });
