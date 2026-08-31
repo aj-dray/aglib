@@ -9,12 +9,20 @@
  * the Claude Agent SDK pointed at `ANTHROPIC_BASE_URL`, most obviously, which
  * is how a harness built on that SDK runs on a model Anthropic never served.
  *
- * It lives here and not in a recipe because it is the inverse of the adapter
- * beside it. The mapping between our four message roles and Anthropic's two
- * plus content blocks is one fact; written twice it would drift, and the
- * direction that drifted would be the one with no test on it. It needs no
- * dependency to say so — `core-dependencies` is about vendor libraries, and
- * this is arithmetic over JSON.
+ * **It lives in a recipe, and the reason is the difference between a client and
+ * an impersonation.** `adapters/anthropic` is a client: Anthropic publishes
+ * that wire and we send on it. This claims to *be* Anthropic to something that
+ * believes it, and a partial impersonation is a promise the package cannot
+ * keep — it would have to track a protocol it does not own, for ever, to stay
+ * true. Held here it is one recipe's plumbing, and its gaps are a recipe's
+ * problem.
+ *
+ * **It is also a last resort rather than the path.** OpenRouter serves the
+ * Anthropic wire directly, and Anthropic obviously does, so an agent pointed at
+ * either needs nothing from this file — and gets prompt caching, thinking and
+ * real token accounting that routing through here would cost it. What this is
+ * for is the case neither covers: a model that cannot speak the wire at all,
+ * which is the same thing Ollama's Anthropic endpoint does for a local model.
  *
  * **Not a server.** There is no listener here, no route, and no credential
  * check. Serving is deployment and belongs to whoever is deploying; this is the
@@ -34,10 +42,10 @@
  * reading of a field we cannot sign.
  */
 import { z } from "zod";
-import { err, ok, type Failure, type Result } from "../result.js";
-import type { JsonValue } from "../json.js";
-import type { Content, ContentPart } from "../content.js";
-import type { Message, ModelDelta, ModelError, ModelRequest, ModelResponse, ToolCall, ToolSpec } from "./model.js";
+import { err, ok, type Failure, type JsonValue, type Result } from "aglib";
+import type { Content, ContentPart } from "aglib";
+import type { Message, ModelDelta, ModelError, ModelRequest, ModelResponse, ToolSpec } from "aglib/model";
+import type { ToolCall } from "aglib/session";
 
 export interface WireError extends Failure {
   code: "invalid";
@@ -56,7 +64,10 @@ export interface WireRequest {
   model: string;
 }
 
-const textBlock = z.object({ type: z.literal("text"), text: z.string() });
+/** A cache breakpoint. Carried, not ignored: dropping it silently is how a bridge defeats caching. */
+const cacheControl = z.object({ type: z.string(), ttl: z.string().optional() }).optional();
+
+const textBlock = z.object({ type: z.literal("text"), text: z.string(), cache_control: cacheControl });
 const imageBlock = z.object({
   type: z.literal("image"),
   source: z.union([
@@ -96,6 +107,15 @@ const requestSchema = z.object({
   temperature: z.number().optional(),
   stream: z.boolean().optional(),
   output_config: z.object({ effort: z.enum(["low", "medium", "high", "xhigh", "max"]) }).partial().optional(),
+  /**
+   * Accepted so effort is not silently lost. The Claude Code harness asks for
+   * thinking with a budget, and a schema that dropped the field turned every
+   * `--effort` into no effort at all, with nothing to notice it by.
+   */
+  thinking: z.object({
+    type: z.string(),
+    budget_tokens: z.number().int().optional(),
+  }).optional(),
 });
 
 /**
@@ -160,6 +180,15 @@ export function decodeAnthropicRequest(body: unknown): Result<WireRequest, WireE
     parameters: (tool.input_schema ?? {}) as JsonValue,
   }));
 
+  // The prefix a client asked to keep. Ours is a count of messages rather than
+  // a mark on one, so the boundary is the last block that carried the mark.
+  const marked = wire.messages.reduce((at, message, index) =>
+    Array.isArray(message.content) && message.content.some((block) =>
+      block.type === "text" && block.cache_control !== undefined) ? index + 1 : at, 0);
+  const systemMarked = typeof wire.system === "object"
+    && wire.system.some((block) => block.cache_control !== undefined);
+  const cacheAfter = marked > 0 ? marked : (systemMarked ? 1 : undefined);
+
   return ok({
     model: wire.model,
     stream: wire.stream ?? false,
@@ -168,9 +197,24 @@ export function decodeAnthropicRequest(body: unknown): Result<WireRequest, WireE
       maxOutputTokens: wire.max_tokens,
       ...(tools.length ? { tools } : {}),
       ...(wire.temperature !== undefined ? { temperature: wire.temperature } : {}),
-      ...(wire.output_config?.effort ? { effort: wire.output_config.effort } : {}),
+      ...(effortOf(wire) ? { effort: effortOf(wire)! } : {}),
+      ...(cacheAfter !== undefined ? { cacheAfter } : {}),
     },
   });
+}
+
+/**
+ * How hard to think, from whichever field the client used.
+ *
+ * `output_config.effort` is the current one and wins. A `thinking` budget is
+ * the older shape and is bucketed against the three the Claude Code harness
+ * actually sets, so a round trip through here returns the level it asked for.
+ */
+function effortOf(wire: z.infer<typeof requestSchema>): ModelRequest["effort"] | undefined {
+  if (wire.output_config?.effort) return wire.output_config.effort;
+  const budget = wire.thinking?.budget_tokens;
+  if (budget === undefined) return undefined;
+  return budget <= 2048 ? "low" : budget <= 8192 ? "medium" : "high";
 }
 
 function decodeBlock(block: { type: string; [key: string]: unknown }): ContentPart | undefined {
@@ -216,6 +260,19 @@ export function encodeAnthropicMessage(input: { response: ModelResponse; model: 
   };
 }
 
+/**
+ * The HTTP status an error deserves.
+ *
+ * Flattening everything to 500 erased the distinctions a client's retry logic
+ * reads: an expired credential retried for ever, a rate limit retried at once,
+ * a context overflow retried identically.
+ */
+export const statusOf = (error: WireError | ModelError): number =>
+  error.code === "auth" ? 401
+  : error.code === "rate-limit" ? 429
+  : error.code === "invalid" || error.code === "context-length" ? 400
+  : 500;
+
 /** The error body, for a request this package could not serve. */
 export function encodeAnthropicError(error: WireError | ModelError): JsonValue {
   const type = error.code === "auth" ? "authentication_error"
@@ -251,6 +308,10 @@ export async function* encodeAnthropicStream(input: {
   model: string;
   id: string;
 }): AsyncGenerator<WireEvent> {
+  // Anthropic reports input usage here, and we do not have it yet: a `Model`
+  // answers with what it spent when the generation returns. Rather than invent
+  // a zero — which a client would sum and bill against — the counts are sent
+  // whole on `message_delta` below, where the real ones exist.
   yield {
     event: "message_start",
     data: {
@@ -258,7 +319,7 @@ export async function* encodeAnthropicStream(input: {
       message: {
         id: input.id, type: "message", role: "assistant", model: input.model,
         content: [], stop_reason: null, stop_sequence: null,
-        usage: { input_tokens: 0, output_tokens: 0 },
+        usage: {},
       },
     },
   };
@@ -316,7 +377,16 @@ export async function* encodeAnthropicStream(input: {
     data: {
       type: "message_delta",
       delta: { stop_reason: stopReason[result.value.finishReason], stop_sequence: null },
-      usage: { output_tokens: result.value.usage.outputTokens ?? 0 },
+      // Every count the provider reported, including the input and cache ones
+      // `message_start` could not know. An absent count stays absent.
+      usage: {
+        ...(result.value.usage.inputTokens !== undefined ? { input_tokens: result.value.usage.inputTokens } : {}),
+        ...(result.value.usage.outputTokens !== undefined ? { output_tokens: result.value.usage.outputTokens } : {}),
+        ...(result.value.usage.cacheReadTokens !== undefined
+          ? { cache_read_input_tokens: result.value.usage.cacheReadTokens } : {}),
+        ...(result.value.usage.cacheWriteTokens !== undefined
+          ? { cache_creation_input_tokens: result.value.usage.cacheWriteTokens } : {}),
+      },
     },
   };
   yield { event: "message_stop", data: { type: "message_stop" } };

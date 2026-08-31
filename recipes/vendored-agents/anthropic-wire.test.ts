@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
 import {
   decodeAnthropicRequest, encodeAnthropicError, encodeAnthropicMessage, encodeAnthropicStream,
-} from "./anthropic-wire.js";
-import { createFakeModel } from "./adapters/fake/index.js";
-import type { ModelResponse } from "./model.js";
+} from "./anthropic-wire.ts";
+import { createFakeModel } from "aglib/model/adapters/fake";
+import type { ModelResponse } from "aglib/model";
 
 test("a turn's tool result leaves the turn it arrived in", () => {
   const decoded = decodeAnthropicRequest({

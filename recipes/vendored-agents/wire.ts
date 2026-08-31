@@ -7,16 +7,16 @@
  * bearer token; the moment it has to know what a `tool_use` block is, it calls
  * `aglib/model/anthropic-wire` to find out.
  *
- * What it buys is not a curiosity. The Claude Agent SDK is the deepest
- * integration here — its own prompt, its own context management, its tools
- * replaceable one at a time — and without this it can only ever run on
- * Anthropic. With it, the same harness runs on OpenRouter, on a local
- * endpoint, on anything with a `Model`, and the SDK never knows.
+ * **Used only where nothing else will do.** Anthropic serves this wire, and so
+ * does OpenRouter, so an agent pointed at either goes straight there and keeps
+ * its prompt caching, its thinking budget and its real token counts. This is
+ * for the third case — a model that speaks neither, reached the way Ollama's
+ * own Anthropic endpoint reaches a local one. `route.ts` decides which.
  */
 import { collect, type Model } from "aglib/model";
 import {
-  decodeAnthropicRequest, encodeAnthropicError, encodeAnthropicMessage, encodeAnthropicStream,
-} from "aglib/model/anthropic-wire";
+  decodeAnthropicRequest, encodeAnthropicError, encodeAnthropicMessage, encodeAnthropicStream, statusOf,
+} from "./anthropic-wire.ts";
 
 export interface WireServer {
   /** What to put in `ANTHROPIC_BASE_URL`. */
@@ -46,23 +46,23 @@ export function serveAnthropicWire(input: { model: Model; port?: number }): Wire
         return json(encodeAnthropicError({ code: "auth", message: "Bad credential.", retryable: false }), 401);
       }
 
-      // Claude Code asks before it sends. An estimate is honest here in a way
-      // it would not be on `usage`: nobody reconciles a bill against it, and
-      // refusing the route only makes the client guess instead.
-      if (url.pathname === "/v1/messages/count_tokens") {
-        const body = await request.text();
-        return json({ input_tokens: Math.ceil(body.length / 4) }, 200);
-      }
+      // `/v1/messages/count_tokens` is deliberately not served. Answering it
+      // would mean counting tokens for a model whose tokenizer we do not have,
+      // and the estimate that stood here — bytes over four — is the input to a
+      // client's compaction decisions. A missing route makes the client fall
+      // back to its own estimate, which is at least its own.
       if (url.pathname !== "/v1/messages" || request.method !== "POST") return json({ type: "error" }, 404);
 
       const decoded = decodeAnthropicRequest(await request.json());
-      if (!decoded.ok) return json(encodeAnthropicError(decoded.error), 400);
+      if (!decoded.ok) return json(encodeAnthropicError(decoded.error), statusOf(decoded.error));
       const { request: modelRequest, stream, model: named } = decoded.value;
       const id = `msg_${crypto.randomUUID().replaceAll("-", "")}`;
 
       if (!stream) {
         const result = await collect(input.model.generate({ ...modelRequest, signal: request.signal }));
-        if (!result.ok) return json(encodeAnthropicError(result.error), 500);
+        // The class survives: a client retries a rate limit and does not retry a
+        // bad credential, and both looked like 500 before.
+        if (!result.ok) return json(encodeAnthropicError(result.error), statusOf(result.error));
         return json(encodeAnthropicMessage({ response: result.value, model: named, id }), 200);
       }
 

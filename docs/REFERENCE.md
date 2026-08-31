@@ -33,10 +33,6 @@ Every name a consumer can import, by entry point. What each one means belongs to
 
 `createOpenAiCompatibleModel` · `createOpenRouterModel` · `OpenAiCompatibleOptions`
 
-### `aglib/model/anthropic-wire`
-
-`decodeAnthropicRequest` · `encodeAnthropicError` · `encodeAnthropicMessage` · `encodeAnthropicStream` · `WireError` · `WireEvent` · `WireRequest`
-
 ### `aglib/model/conformance`
 
 `Answering` · `ConformanceCase` · `defineModelConformance` · `ModelScript` · `ModelUnderTest` · `SentRequest` · `Wire`
