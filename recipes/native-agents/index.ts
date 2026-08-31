@@ -41,6 +41,8 @@ export interface Options {
 
 const choiceDetail = (choice: Choice | undefined): Sink["detail"] | undefined => choice?.detail;
 
+/** A command answers on the account channel, and falls back to the answer only
+ * because a caller who gave neither still has to see what it typed. */
 const say = (sink: Sink, text: string) => (sink.status ?? sink.write)(`${text}\n`);
 
 export async function main(task: string, options: Options = {}): Promise<string> {

@@ -49,7 +49,14 @@ import { textOf } from "./content.js";
 export interface Sink {
   /** The answer: assistant text, exactly as it streamed. */
   write(text: string): void;
-  /** Everything else. Defaults to `write`; a terminal usually points it at stderr. */
+  /**
+   * Everything else: tools, provenance, what the run spent.
+   *
+   * Omit it and that account is **dropped**, not folded into `write`. Falling
+   * back would break the one promise `write` makes — that it holds the answer
+   * and nothing else — for every caller who only wanted the answer and did not
+   * think to say so.
+   */
   status?(line: string): void;
   /** Enables colour and the elapsed-time ticker. A caller without a terminal leaves it off. */
   tty?: boolean;
@@ -122,7 +129,7 @@ function readable(content: Content): string {
 }
 
 function createRenderer(sink: Sink): Renderer {
-  const status = sink.status ?? sink.write;
+  const status = sink.status ?? (() => {});
   const detail = sink.detail ?? "normal";
   const debugging = detail === "debug";
   const now = sink.now ?? (() => Date.now());

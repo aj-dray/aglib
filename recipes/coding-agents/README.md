@@ -59,8 +59,10 @@ the comparison still and change only the route.
 
 The agent owns its context, so continuing one means handing back the name it
 knows it by. The adapter asks for `session/load` when given `resume`, and
-reports the id through `onSession`; this recipe keeps it in the session's
-metadata, which is what metadata is for — aglib stores it and never reads it.
+reports the id through `onSession`; this recipe holds it for the life of the
+process, which is as long as its in-memory store lasts. A deployment wanting
+continuity across restarts would keep it in the session's metadata, which is
+what metadata is for — aglib stores it and never reads it.
 
 Orientation leads the *first* turn only. The protocol has no system-prompt
 field, so it has nowhere else to go; repeating it every turn would be the same

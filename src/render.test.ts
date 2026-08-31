@@ -176,3 +176,19 @@ test("a run nobody asked for has no answer channel", async () => {
   expect(status.join("")).toContain("[8bc0] 294 lines");
   expect(status.join("")).toContain("[8bc0] — completed");
 });
+
+test("a sink with nowhere to put the account drops it, rather than into the answer", () => {
+  // `write` holds the answer and nothing else. Folding status into it would
+  // break that promise for every caller who only wanted the answer and did not
+  // think to say so.
+  const answer: string[] = [];
+  return renderRun(
+    runOf([
+      at({ type: "assistant", runId: "r", content: "", calls: [{ callId: "c1", name: "bash", arguments: "{}" }] }),
+      { type: "text.delta", text: "1250" },
+    ]),
+    { write: (text) => answer.push(text), now: () => 0 },
+  ).then(() => {
+    expect(answer.join("")).toBe("1250\n");
+  });
+});
