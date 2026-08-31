@@ -47,10 +47,6 @@
       "types": "./dist/model/index.d.ts",
       "import": "./dist/model/index.js"
     },
-    "./model/anthropic-wire": {
-      "types": "./dist/model/anthropic-wire.d.ts",
-      "import": "./dist/model/anthropic-wire.js"
-    },
     "./model/conformance": {
       "types": "./dist/model/conformance.d.ts",
       "import": "./dist/model/conformance.js"

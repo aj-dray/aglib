@@ -38,20 +38,51 @@ machine* — which is why either one refuses a sandbox that is not this machine.
 `--tools both` is the interesting mode: keep its editing tools, which are good,
 and add yours beside them.
 
-## One bridge, any model
+## Where their requests go
 
-Both libraries speak Anthropic's wire. `serveAnthropicWire` puts a socket in
-front of `aglib/model/anthropic-wire` and hands each a base URL and a token, so
-both run on whatever `Model` is behind the port, and neither learns which
-provider answered.
+Both agents speak wires that real providers already serve, so they go straight
+there. `route.ts` picks one of three:
 
-For Claude Code that is `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`. For Pi
-it is three fields on a model descriptor, because Pi's model *is* a description
-of a wire rather than a client.
+| provider | Claude Code | Pi |
+| --- | --- | --- |
+| `anthropic` | its own API | the Anthropic wire |
+| `openrouter` | **OpenRouter's Anthropic endpoint** — "Claude Code speaks its native protocol directly to OpenRouter. No local proxy server is required." | OpenRouter's OpenAI endpoint, which pi-ai already ships a descriptor for |
+| anything else | the bridge | the bridge |
 
-The translation is in the package; only the listener is here. Serving HTTP is
-deployment, and `docs/CODE.md` puts a vendor dependency in a recipe — the codec
-has neither problem.
+An earlier version sent *everything* through the bridge, so the two cases that
+needed nothing paid for the one that did. Going direct restores prompt caching:
+a second turn now reports something like `4 in · 9.5k cached`, where the bridge
+had been stripping `cache_control` and re-sending the whole prefix at full price
+every turn.
+
+## The bridge, and what it costs
+
+`serveAnthropicWire` puts a socket in front of `anthropic-wire.ts`, which turns
+an Anthropic request into a `ModelRequest`, calls any `Model`, and turns the
+answer back into Anthropic's frames. It is how a model speaking neither wire
+drives Claude Code — the same job Ollama's Anthropic endpoint does for a local
+model. `--bridge` forces it even where the provider would have served the wire
+itself, which is how it stays exercised.
+
+It is a recipe file and not package surface. The distinction is between a client
+and an impersonation: `adapters/anthropic` sends on a wire Anthropic publishes;
+this claims to *be* Anthropic to something that believes it. A partial
+impersonation is a promise a library cannot keep, because keeping it means
+tracking somebody else's protocol for ever.
+
+What it still costs, stated rather than discovered:
+
+- **Input tokens arrive late.** A `Model` reports what it spent when the
+  generation *returns*; the wire wants that count before the first delta. The
+  counts go out on `message_delta` instead, and a client reading usage only from
+  `message_start` records none. Buffering the whole response would fix it and
+  would end streaming.
+- **No token counting.** `/v1/messages/count_tokens` is deliberately not served:
+  counting for a model whose tokenizer we do not have is a guess feeding a
+  client's compaction decisions. Absent, the client uses its own estimate.
+- **Effort is bucketed.** A `thinking` budget maps to our three levels against
+  the numbers the Claude Code harness itself sets, so a round trip returns what
+  it asked for and anything else is approximate.
 
 ## What the harness no longer declares
 

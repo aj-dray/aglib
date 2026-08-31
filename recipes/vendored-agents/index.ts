@@ -26,7 +26,7 @@ import type { Model } from "aglib/model";
 import type { Sandbox } from "aglib/sandbox";
 import { Database } from "bun:sqlite";
 import { recipeMarker } from "../manifest.ts";
-import { serveAnthropicWire } from "./wire.ts";
+import { anthropicRoute, piRoute } from "./route.ts";
 import { createClaudeCodeHarness } from "./claude-code.ts";
 import { createPiHarness } from "./pi.ts";
 import { sandboxTools } from "./tools.ts";
@@ -41,6 +41,8 @@ export interface Choice {
   sandbox: "local" | "docker";
   /** Answer once and exit, for someone at a terminal who wants the script behaviour. */
   once?: boolean;
+  /** Route through the local Anthropic bridge even where the provider serves that wire itself. */
+  bridge?: boolean;
   provider: "openrouter" | "openai" | "anthropic";
   model: string;
   effort?: "low" | "medium" | "high";
@@ -104,9 +106,18 @@ export async function main(
   };
   const sandbox = await openSandbox(choice.sandbox);
 
-  // One bridge, both harnesses. Neither vendor library learns which provider
-  // answered, and neither had to be told how to talk to it.
-  const wire = serveAnthropicWire({ model: options.model ?? createChosenModel(choice) });
+  // Straight to the provider where one serves the wire, and through the bridge
+  // only where none does. Both agents are told a base URL and a token either
+  // way, and neither learns which of the three it got.
+  const route = (choice.harness === "pi" ? piRoute : anthropicRoute)({
+    provider: choice.provider,
+    model: () => options.model ?? createChosenModel(choice),
+    ...(choice.bridge ? { force: true } : {}),
+  });
+
+  // Worth saying out loud: routing through the bridge costs prompt caching and
+  // real token counts, and a reader should know which one they got.
+  (sink.status ?? sink.write)(`· via ${route.via}\n`);
 
   const instructions = "You are a careful assistant working inside a sandbox. Be brief and say what you did.";
 
@@ -121,7 +132,7 @@ export async function main(
         // the committed log every activation, which is why it is the one vendor
         // harness that can declare `recovery: "history"`.
         harness: createPiHarness({
-          baseUrl: wire.url, token: wire.token,
+          baseUrl: route.baseUrl, token: route.token, api: route.api,
           ...(choice.effort ? { effort: choice.effort } : {}),
         }),
         // Every tool goes through the executor, theirs included: `pi-tools.ts`
@@ -144,9 +155,11 @@ export async function main(
           ...(choice.effort ? { effort: choice.effort } : {}),
           env: {
             ...process.env as Record<string, string>,
-            ANTHROPIC_BASE_URL: wire.url,
-            ANTHROPIC_AUTH_TOKEN: wire.token,
-            ANTHROPIC_API_KEY: wire.token,
+            ANTHROPIC_BASE_URL: route.baseUrl,
+            ANTHROPIC_AUTH_TOKEN: route.token,
+            // OpenRouter's guide is explicit that this must be empty, or the
+            // SDK prefers it and talks to Anthropic with somebody else's key.
+            ANTHROPIC_API_KEY: route.via === "openrouter" ? "" : route.token,
             ANTHROPIC_MODEL: "claude-sonnet-5",
             ANTHROPIC_SMALL_FAST_MODEL: "claude-sonnet-5",
           },
@@ -178,7 +191,7 @@ export async function main(
     }
   }
 
-  await wire.close();
+  await route.close();
   await sandbox.close();
   await store.close();
   if (result && result.status !== "completed") {
@@ -191,7 +204,7 @@ export async function main(
 export function parseArguments(argv: readonly string[]): { choice: Choice; task: string } {
   // Flags taking no value must be named, or `--once "do the thing"` swallows
   // the task as `once`'s argument and the agent is asked nothing.
-  const valueless = new Set(["once"]);
+  const valueless = new Set(["once", "bridge"]);
   const flags = new Map<string, string>();
   const words: string[] = [];
   for (let index = 0; index < argv.length; index += 1) {
@@ -217,6 +230,7 @@ export function parseArguments(argv: readonly string[]): { choice: Choice; task:
       model: flags.get("model") || defaultChoice.model,
       ...(effort ? { effort } : {}),
       ...(flags.has("once") ? { once: true } : {}),
+      ...(flags.has("bridge") ? { bridge: true } : {}),
     },
     task: words.join(" "),
   };

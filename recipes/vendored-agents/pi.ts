@@ -26,9 +26,14 @@ import { textOf } from "aglib";
 import type { ToolExecutor } from "aglib";
 
 export interface PiOptions {
-  /** Where its requests go. This is `serveAnthropicWire`, so any model answers. */
+  /** Where its requests go — a real provider, or the bridge when neither serves the wire. */
   baseUrl: string;
   token: string;
+  /**
+   * The wire spoken there. A pi-ai model is a description of an endpoint rather
+   * than a client, so naming the wire is the whole of pointing it somewhere.
+   */
+  api?: "anthropic-messages" | "openai-completions";
   /** What Pi calls the model. An observation for its own logs; the bridge ignores it. */
   model?: string;
   effort?: "low" | "medium" | "high";
@@ -57,8 +62,8 @@ async function runTurn(options: PiOptions, context: HarnessContext): Promise<Har
       model: {
         id: options.model ?? "claude-sonnet-5",
         name: options.model ?? "claude-sonnet-5",
-        api: "anthropic-messages",
-        provider: "anthropic",
+        api: options.api ?? "anthropic-messages",
+        provider: options.api === "openai-completions" ? "openrouter" : "anthropic",
         baseUrl: options.baseUrl,
         reasoning: false,
         input: ["text"],
