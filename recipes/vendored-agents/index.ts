@@ -84,14 +84,6 @@ async function openSandbox(kind: Choice["sandbox"]): Promise<Sandbox> {
   return sandbox.value;
 }
 
-/**
- * What an agent that keeps its own context needs handed back.
- *
- * aglib stores this and never reads it — a session's metadata is the
- * application's, and "which conversation is this, over there" is exactly the
- * kind of fact it is for.
- */
-interface VendorSession { vendorSessionId?: string }
 
 export async function main(
   task: string,
@@ -121,8 +113,10 @@ export async function main(
 
   const instructions = "You are a careful assistant working inside a sandbox. Be brief and say what you did.";
 
-  // Captured while a run is in flight and written after it commits. Appending
-  // mid-run would race the harness for the session's position and lose.
+  // Held for the life of this process, and no longer than that. An agent that
+  // keeps its own context is continued by being handed the name it knows the
+  // conversation by; where that name should live if the process restarts is a
+  // question this recipe does not answer, because its store is in memory.
   let vendorSessionId: string | undefined;
 
   const agentFor = (): Agent => choice.harness === "pi"
@@ -178,17 +172,6 @@ export async function main(
     // told us what the agent calls this conversation.
     result = await renderRun(runAgent({ agent: agentFor(), store, sessionId, key: "me", input }), sink);
 
-    // Written once the run has committed everything it is going to. Appending
-    // mid-run would race the harness for the session's position and lose.
-    if (vendorSessionId) {
-      const read = await store.read({ sessionId });
-      if (read.ok && (read.value.metadata as VendorSession | null)?.vendorSessionId !== vendorSessionId) {
-        await store.append({
-          sessionId, expectedSeq: read.value.seq, entries: [],
-          metadata: { vendorSessionId } satisfies VendorSession,
-        });
-      }
-    }
   }
 
   await route.close();

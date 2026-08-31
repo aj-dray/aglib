@@ -74,8 +74,6 @@ function credentialsFor(row: AcpAgentRow): Record<string, string> {
   return out;
 }
 
-/** What an agent that keeps its own context is called over there. Ours to store, never ours to read. */
-interface VendorSession { vendorSessionId?: string }
 
 export async function main(
   task: string,
@@ -97,10 +95,11 @@ export async function main(
 
   const sandbox = await openSandbox(choice.sandbox);
 
-  // Captured while a run is in flight and written after it commits. The agent
-  // owns its context — that is what `recovery: "none"` means — so continuing a
-  // conversation is handing back the name it knows the conversation by, which
-  // the protocol answers with `session/load`.
+  // Held for the life of this process, and no longer than that. The agent owns
+  // its context — that is what `recovery: "none"` means — so continuing is
+  // handing back the name it knows the conversation by, which the protocol
+  // answers with `session/load`. Where that name lives across a restart is a
+  // question this recipe does not answer, because its store is in memory.
   let vendorSessionId: string | undefined;
 
   const agentFor = (): Agent => ({
@@ -138,17 +137,6 @@ export async function main(
     }), sink);
     first = false;
 
-    // Written once the run has committed everything it is going to. Appending
-    // mid-run would race the harness for the session's position and lose.
-    if (vendorSessionId) {
-      const read = await store.read({ sessionId });
-      if (read.ok && (read.value.metadata as VendorSession | null)?.vendorSessionId !== vendorSessionId) {
-        await store.append({
-          sessionId, expectedSeq: read.value.seq, entries: [],
-          metadata: { vendorSessionId } satisfies VendorSession,
-        });
-      }
-    }
   }
 
   await sandbox.close();

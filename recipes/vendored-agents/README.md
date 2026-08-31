@@ -110,10 +110,15 @@ interrupted run can be picked up and finished.
 
 **Claude Code is handed its own name for the conversation.** Its context, its
 prompt cache and its own compaction live in the agent, so continuing means
-passing `resume` — the session id it reported when it started, kept in this
-session's metadata and given back next turn. That is `recovery: "none"`: what
-matters is over there, so our entries describe what happened without being able
-to put it back.
+passing `resume` — the session id it reported when it started, held for the life
+of this process and handed back on the next turn. That is `recovery: "none"`:
+what matters is over there, so our entries describe what happened without being
+able to put it back.
+
+Where that id should live across a restart is a question this recipe does not
+answer. Its store is in memory, so there is nothing to survive; a deployment
+that wanted continuity across restarts would keep it in the session's metadata,
+which is what metadata is for.
 
 Feeding it our log instead would have worked and was the other real option: it
 would make the log authoritative and survive the agent forgetting. It also
