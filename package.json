@@ -1,7 +1,6 @@
 {
   "name": "aglib",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
   "type": "module",
   "description": "A small TypeScript toolkit for building your own agent harness.",
   "license": "MIT",

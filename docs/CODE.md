@@ -122,6 +122,15 @@ The checks are themselves tested, including that each fails loudly on empty inpu
 cannot tell "nothing is wrong" from "I was not looking" is worse than none, because it is green
 while blind.
 
+## Releasing
+
+The package is `aglib` on npm, and `version` in `package.json` is the only place a version is
+written. A release is a commit that sets it, tagged `v<version>`: pushing the tag runs
+`.github/workflows/publish.yml`, which refuses a tag that disagrees with the manifest, runs the gate,
+and publishes through npm's trusted publishing — the workflow is the credential, so no token is
+held anywhere. Pre-1.0, a fix bumps the patch and a changed contract bumps the minor; there are no
+deprecation aliases, so a consumer pins an exact version and moves on purpose.
+
 ## Deferred
 
 A deferral points at a real destination or it is a decision nobody made. One is open:

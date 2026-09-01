@@ -14,7 +14,7 @@ own, compose a vendor's agent library, or drive one over a protocol — the log,
 the rendering, the accounting and the handoff are the same in all three, and what
 *differs* is declared rather than discovered.
 
-> **Pre-release.** The API changes without deprecation aliases.
+> **Pre-release.** The API changes without deprecation aliases, so pin an exact version: `bun add aglib@<version>`.
 
 ## Run one
 
