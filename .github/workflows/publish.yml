@@ -29,6 +29,9 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
+      - name: Upgrade npm for trusted publishing
+        run: npm install -g npm@latest
+
       - name: Refuse a tag that does not name the manifest's version
         run: |
           version="$(bun -e 'console.log((await Bun.file("package.json").json()).version)')"
