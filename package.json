@@ -5,6 +5,10 @@
   "description": "A small TypeScript toolkit for building your own agent harness.",
   "license": "MIT",
   "author": "Adam Dray",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aj-dray/aglib.git"
+  },
   "packageManager": "bun@1.3.14",
   "engines": {
     "node": ">=22.5.0"
