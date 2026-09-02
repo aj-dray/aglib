@@ -4,7 +4,7 @@ import type { Sandbox, SandboxProcess } from "../../../sandbox/sandbox.js";
 import type { Decide, ToolSpec } from "../../../tools/tool.js";
 import type { JsonValue } from "../../../json.js";
 import { textOf } from "../../../content.js";
-import { err, ok, type Failure } from "../../../result.js";
+import { err, ok, type Failure, type Result } from "../../../result.js";
 import { createRpc, type Rpc } from "./rpc.js";
 
 /** An agent process: argv and the environment that selects its provider and model. */
@@ -54,21 +54,18 @@ export interface AcpHarnessOptions {
   sandbox: Sandbox;
   mcpServers?: readonly AcpMcpServer[];
   /**
-   * What to set before prompting, by option id. Applied only where the agent
-   * published that option and, for a select, that value — otherwise the run
-   * fails naming what it does offer, rather than quietly running something else.
+   * What to set before prompting, by option id — the agent's own ids, from
+   * `onConfig`. The only configuration door, deliberately: an option this
+   * package named would be a guess at another product's vocabulary, and one
+   * that goes stale the first time an agent ships an axis nobody thought of.
+   *
+   * Applied only where the agent published that option and, for a select, that
+   * value — otherwise the run fails naming what it does offer, rather than
+   * quietly running something else.
    */
   select?: Readonly<Record<string, string | boolean>>;
-  /**
-   * Requested model, matched against whichever option the agent categorised as
-   * its model selector. A convenience over `select` for the one option every
-   * agent has, and it fails the same way.
-   */
-  model?: string;
   /** What the agent published. The caller persists it so a session can offer the agent's own choices. */
   onConfig?(options: readonly AcpConfigOption[]): void;
-  /** Agent-defined mode. Choosing one that asks before acting is what routes its own tools through `decide`. */
-  mode?: string;
   /**
    * Applied to the agent's own tools, per call, before they run.
    *
@@ -84,6 +81,20 @@ export interface AcpHarnessOptions {
 }
 
 const PROTOCOL_VERSION = 1;
+
+/**
+ * The handshake, and what it claims for us.
+ *
+ * Two callers open a connection — a turn, and `acpOptions` — and an agent
+ * decides what to offer from what the client says it can do. A second copy of
+ * this is a second answer to the same question, and the two would drift.
+ */
+const initialize = (rpc: Rpc) =>
+  rpc.request("initialize", {
+    protocolVersion: PROTOCOL_VERSION,
+    clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: true },
+    clientInfo: { name: "aglib", version: "0" },
+  });
 
 /**
  * Runs a foreign coding agent over the Agent Client Protocol.
@@ -105,6 +116,44 @@ export function createAcpHarness(options: AcpHarnessOptions): Harness {
     recovery: "none",
     run: (context) => runTurn(options, context),
   };
+}
+
+/**
+ * What an agent offers, before anyone has asked it anything.
+ *
+ * Over this protocol an agent publishes its options in the answer to
+ * `session/new`, so nothing knows what a model, a mode or a reasoning level is
+ * called until a session exists — and a session exists on the first prompt.
+ * That left a client with a menu it could not draw until after the choice it
+ * wanted to offer had already been made.
+ *
+ * So this opens one and asks. It spawns, initialises, opens a session, reads
+ * what came back and closes: a process and a handshake, no prompt, no
+ * generation, nothing billed. The session it opened is thrown away — the run
+ * opens its own, exactly as it did before.
+ */
+export async function acpOptions(input: {
+  agent: AcpAgent;
+  sandbox: Sandbox;
+}): Promise<Result<readonly AcpConfigOption[], Failure>> {
+  const started = await input.sandbox.spawn({
+    command: input.agent.command,
+    cwd: input.sandbox.root,
+    ...(input.agent.env ? { env: input.agent.env } : {}),
+  });
+  if (!started.ok) return err(started.error);
+
+  const rpc = createRpc(started.value);
+  try {
+    const ready = await initialize(rpc);
+    if (!ready.ok) return err(ready.error);
+
+    const opened = await rpc.request("session/new", { cwd: input.sandbox.root, mcpServers: [] } as unknown as JsonValue);
+    if (!opened.ok) return err(opened.error);
+    return ok(readOptions(opened.value).options);
+  } finally {
+    rpc.close();
+  }
 }
 
 async function runTurn(options: AcpHarnessOptions, context: HarnessContext): Promise<HarnessResult> {
@@ -153,11 +202,7 @@ function createTurn(options: AcpHarnessOptions, context: HarnessContext, rpc: Rp
     servePermission();
     rpc.onNotify("session/update", (params) => { void receive(params); });
 
-    const ready = await rpc.request("initialize", {
-      protocolVersion: PROTOCOL_VERSION,
-      clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: true },
-      clientInfo: { name: "aglib", version: "0" },
-    });
+    const ready = await initialize(rpc);
     if (!ready.ok) return { status: "failed", error: ready.error };
     const capabilities = field(ready.value, "agentCapabilities");
 
@@ -230,25 +275,15 @@ function createTurn(options: AcpHarnessOptions, context: HarnessContext, rpc: Rp
     const { options: published, legacyModel } = readOptions(opened);
     if (published.length) options.onConfig?.(published);
 
-    if (options.mode) {
-      const set = await rpc.request("session/set_mode", { sessionId: id, modeId: options.mode });
-      if (!set.ok) return set;
-    }
-
-    const wanted: Record<string, string | boolean> = { ...options.select };
-    if (options.model) {
-      const selector = published.find((option) => option.category === "model");
-      if (!selector) {
-        return err<Failure>({
-          code: "unsupported",
-          message: `${options.id} publishes no model selector, so '${options.model}' cannot be chosen over the protocol. Point it at a model through its environment instead.`,
-          retryable: false,
-        });
-      }
-      wanted[selector.id] = options.model;
-    }
-
-    for (const [option, value] of Object.entries(wanted)) {
+    // One door, and `select` is it. There were two more — `mode`, which sent
+    // `session/set_mode`, and `model`, which found whichever option the agent
+    // had categorised as its selector. Both were conveniences naming an axis,
+    // and naming an axis is guessing at a vocabulary that is not ours: the
+    // agents measured here publish five categories between them, and no
+    // shorthand was ever going to cover the next one. `session/set_config_option`
+    // with `configId: "mode"` was checked against `claude-agent-acp` and does
+    // what `session/set_mode` did, answering with the new state as well.
+    for (const [option, value] of Object.entries(options.select ?? {})) {
       const published_ = published.find((candidate) => candidate.id === option);
       if (!published_) {
         return err<Failure>({

@@ -86,7 +86,10 @@ async function selectModel(shape: "configOptions" | "models", model: string) {
     id: `fake-${shape}`,
     agent: { command: [process.execPath, await fakeAgent(shape)] },
     sandbox: created.value,
-    model,
+    // Through `select`, by the agent's own option id. There was a `model`
+    // shorthand that found the selector for you; it named an axis, and naming
+    // an axis is guessing at a vocabulary that belongs to the agent.
+    select: { model },
     onConfig: (published) => { options.push([...published]); },
   });
   const { committed, value } = context(created.value);
@@ -121,7 +124,7 @@ test("acp: both shapes are reported to the caller as one model selector", async 
   }
 });
 
-test("acp: a model the agent does not offer fails naming what it does", async () => {
+test("acp: a value the agent does not offer fails naming what it does", async () => {
   const { result } = await selectModel("configOptions", "enormous");
   expect(result.status).toBe("failed");
   if (result.status !== "failed") return;

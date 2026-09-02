@@ -1,19 +1,40 @@
-# coding-agents
+# coding-agent
 
 Somebody else's whole agent, cheaply. Any agent in the ACP registry, started
-inside your sandbox, inside your log, under your permission decision — for the
-price of one line of argv.
+inside your sandbox, inside your log, and through your permission seam — for the
+price of one line of argv. The shipped rule allows everything, deliberately: a
+recipe does not know an operator's policy. `decide` in `index.ts` is where one
+goes, and what it can see over this protocol is named there.
 
 ```bash
-bun run recipe coding-agents --agent claude-code "what is in this directory?"
-bun run recipe coding-agents --agent codex --sandbox docker "run the tests"
+bun run recipe coding-agent                       # pick an agent, then talk to it
+bun run recipe coding-agent --harness cursor "what is in this directory?"
+bun run recipe coding-agent --harness claude-code --sandbox docker "run the tests"
 ```
+
+**What this shows.** The cheapest containment on offer: a vendor's whole agent process started
+*inside* your sandbox, its work arriving as your entries, for one row of argv. What you give up —
+its tools, its prompt, its recovery — is named below rather than papered over.
+
+At the prompt, `/harness` changes which agent runs and `/options` lists what
+*that* agent lets you change — its own options, its own values, never a menu
+this recipe invented. A number drills into one, a second number picks a value.
+
+One command rather than `/model`, `/mode`, `/effort`, because naming the axes
+means guessing at another product's vocabulary, and the guess was already
+wrong — these are the two we measured:
+
+| | publishes |
+| --- | --- |
+| Claude Code | `mode` (6) · `model` (5) · `effort` default…max · `fast` on/off · `agent` |
+| Cursor | `model` (35) · `mode` (3) — a reasoning level is inside the model id, `grok-4.6[effort=high]` |
 
 ## The thin end
 
-`vendored-agents` is the other end of the same argument. It spends a vendor
-dependency and a file per agent to keep the prompt, the tools and the resume.
-This spends a line, and keeps three things:
+`vendored-agent` is the other end of the same argument. It spends a vendor
+dependency to compose one library's agent — its tools re-pointed at a sandbox,
+its transcript assigned from the log. This spends a line, and keeps three
+things:
 
 - **The log.** Whatever the agent did arrives as our entries, so one durable
   session describes an ACP turn and a native turn identically.
@@ -37,23 +58,23 @@ would be describing a control point this route does not have.
 
 `credential` names environment rather than a credential type, because where an
 agent's requests go is the operator's decision. Point `ANTHROPIC_BASE_URL` at
-`serveAnthropicWire` from `vendored-agents` and the agent runs on whatever
-`Model` is behind the port — this recipe neither knows nor needs to.
+anything serving that wire — a provider, a gateway, or a local server of your
+own — and the agent runs on it. This recipe neither knows nor needs to.
 
 A row that cannot run here says why. That is a fact about this machine's setup
 rather than about the agent, and leaving the row in with the reason attached is
 more useful than deleting it, because the next person asks the same question.
 
-## Which agents belong here rather than in `vendored-agents`
+## Which agents belong here rather than in `vendored-agent`
 
-The test is whether the vendor ships its agent as a **library**. Claude Code and
-Pi do, so they have deep adapters next door. OpenCode publishes one package and
-no agent library — its loop is a composition of its own and its tools are
-reachable only through its plugin boundary — so it belongs here. Codex ships
-nothing embeddable either.
-
-Claude Code appears in both, on purpose. It is the one agent where you can hold
-the comparison still and change only the route.
+The test is whether the vendor ships its agent as a **library** — tools as
+values, a transcript you can assign. Pi does, so it has a deep adapter next
+door. Nothing else measured here does. OpenCode publishes one package and no
+agent library: its loop is a composition of its own and its tools are reachable
+only through its plugin boundary. Codex ships nothing embeddable either. The
+Claude Code SDK is the near miss — it *is* a library, but of a process, so its
+tools are names and its context is its own; `vendored-agent`'s README says what
+that cost when it lived there, and its row is here instead.
 
 ## Holding a conversation
 
@@ -71,19 +92,27 @@ words again to an agent that already has them.
 ## At the prompt
 
 ```
-/model <name>   ask the agent to use a model it publishes
-/agent <id>     start a different agent
-/detail answer|normal|debug
+/options          what this agent lets you change — model, mode, effort, whatever it has
+/harness [id]     list the agents on offer, or start one
+/detail minimal|standard|detailed
+/help
 ```
 
-`/model` is a request to the agent rather than a choice we make. Over the
-protocol a model is one of the options the agent publishes, so the adapter
-matches it against that agent's own selector and refuses by naming what it does
-offer. An agent that publishes none is told so plainly, with the suggestion to
-point it at a model through its environment instead.
+`/options` prints what *this* agent published, a number opens one, a second
+number picks a value. Nothing here names an axis, which is the point: a model
+is one of the agent's own options rather than a choice this recipe makes, and
+the adapter applies the pick keyed by the agent's own id. An agent that has
+published nothing is told so plainly rather than shown an empty menu.
 
-`/agent` starts a different one, which is a different conversation: it owns its
-context, and a new one has not seen this. The command says so first.
+`/harness` starts a different agent, which is a different conversation: it owns
+its context, and a new one has not seen this. The command says so before it
+happens, and what the old agent published is not what the new one offers, so
+the menu is asked for again.
+
+The same two-line gesture drives `vendored-agent`, on purpose. The reason
+differs — there the axes are the recipe's own, because a vendor library
+publishes a constructor rather than a menu — but an operator moving between the
+two should not have to learn a second way to ask the same question.
 
 ## Running the live test
 
@@ -92,7 +121,7 @@ AGLIB_LIVE_ACP=1 \
   ANTHROPIC_BASE_URL=https://openrouter.ai/api \
   ANTHROPIC_AUTH_TOKEN=$OPENROUTER_API_KEY \
   ANTHROPIC_API_KEY= \
-  bun test recipes/coding-agents
+  bun test recipes/coding-agent
 ```
 
 That is the whole of pointing a protocol agent at a different provider: three

@@ -15,11 +15,11 @@ Every name a consumer can import, by entry point. What each one means belongs to
 
 ### `aglib/harness/adapters/acp`
 
-`AcpAgent` · `AcpConfigOption` · `AcpHarnessOptions` · `AcpMcpServer` · `createAcpHarness`
+`AcpAgent` · `AcpConfigOption` · `AcpHarnessOptions` · `AcpMcpServer` · `acpOptions` · `createAcpHarness`
 
 ### `aglib/model`
 
-`collect` · `Message` · `Model` · `ModelDelta` · `ModelError` · `ModelRequest` · `ModelResponse` · `ToolSpec`
+`Message` · `Model` · `ModelDelta` · `ModelError` · `ModelRequest` · `ModelResponse` · `ToolSpec`
 
 ### `aglib/model/adapters/anthropic`
 
