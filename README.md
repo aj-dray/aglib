@@ -1,12 +1,18 @@
 # aglib
 
-A small TypeScript toolkit for building **your own agent harness**, inside an
-application you own.
+A small TypeScript toolkit for building **production agents** — the kind with a
+durable log, a permission rule on every call, somewhere contained to run, and an
+answer for what happens when the process dies mid-turn.
 
 You bring the product — users, tenancy, channels, UI, deployment, policy. aglib
-gives you a durable session log you can resume, a loop that runs against it,
-tools under your own permission rule, somewhere contained to run them, and four
-seams with adapters: **model, store, sandbox, harness**.
+gives you a session log that *is* the state, a loop that runs against it, tools
+under your own permission rule, somewhere contained to run them, and four seams
+with adapters: **model, store, sandbox, harness**.
+
+Whose loop does the reasoning is a decision here, not an assumption. Write your
+own, compose a vendor's agent library, or drive one over a protocol — the log,
+the rendering, the accounting and the handoff are the same in all three, and what
+*differs* is declared rather than discovered.
 
 > **Pre-release.** The API changes without deprecation aliases, so pin an exact version: `bun add aglib@npm:@a-dray/aglib@<version>`. The unscoped name is a lookalike of an existing package; the alias keeps imports as `aglib`.
 
@@ -31,19 +37,26 @@ src/
   model/      store/      sandbox/      harness/      each: <port>.ts → adapters/
 ```
 
-Four ports, each with adapters and an executable conformance suite. Our own
-loop is `harness/adapters/native`, beside the others rather than above them.
+Four ports, each with adapters. Three ship an executable conformance suite;
+`harness` does not, because what one must prove depends on what it declares. Our
+own loop is `harness/adapters/native`, beside the others rather than above them.
+
+**`src/` is the library** — everything published to npm, and nothing that knows
+what your agent is for. **`recipes/` is where most of it earns its place** —
+runnable programs that each answer one production question. An export needs a
+consumer: a recipe that composes it, or a conformance suite run against an
+implementation here. A surface with neither fails `bun run check`.
 
 ## Three recipes
 
 One per answer to "who does the reasoning". Each is the smallest thing that
 still makes its point, and between them they exercise every seam.
 
-| Recipe | Whose loop |
-| --- | --- |
-| [`recipes/native-agents`](recipes/native-agents/README.md) | ours — memory, skills, subagents, a sandbox you choose |
-| [`recipes/vendored-agents`](recipes/vendored-agents/README.md) | a vendor's, from its library — Claude Code and Pi |
-| [`recipes/coding-agents`](recipes/coding-agents/README.md) | a vendor's, over a protocol — any agent in the ACP registry |
+| Recipe | Whose loop | What it shows |
+| --- | --- | --- |
+| [`native-agent`](recipes/native-agent/README.md) | ours | The whole surface in one program — memory, skills, subagents, a sandbox you choose — and the one thing only our own loop offers: a message reaching a busy session mid-turn. |
+| [`vendored-agent`](recipes/vendored-agent/README.md) | a vendor's, from its library | What a vendor library must expose for the log to stay the state. Pi's tools are values you re-point at your sandbox and its transcript is a field you assign, so an interrupted run continues — `recovery: "history"`. Its README says what the tiers below that get you. |
+| [`coding-agent`](recipes/coding-agent/README.md) | a vendor's, over a protocol | The cheapest containment on offer: any ACP agent started *inside* your sandbox, its work arriving as your entries, for one row of argv. |
 
 ## Where to read next
 

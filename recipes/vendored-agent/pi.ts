@@ -14,8 +14,8 @@
  *     the only vendor harness here that can honestly claim `recovery`.
  *
  * Its model is a descriptor — an id, a wire and a base URL — not a client, so
- * pointing it at `serveAnthropicWire` is three fields. Pi's loop then runs on
- * whatever `Model` is behind the port, and never learns that it did.
+ * pointing its loop at a provider is three fields and no translation. That is
+ * the third seam, and the reason `route.ts` is a table rather than a server.
  */
 import { Agent } from "@earendil-works/pi-agent-core";
 // The stream function is pi's own: it speaks the wire the descriptor names.
@@ -26,7 +26,7 @@ import { textOf } from "aglib";
 import type { ToolExecutor } from "aglib";
 
 export interface PiOptions {
-  /** Where its requests go — a real provider, or the bridge when neither serves the wire. */
+  /** Where its requests go. */
   baseUrl: string;
   token: string;
   /**
@@ -34,7 +34,14 @@ export interface PiOptions {
    * than a client, so naming the wire is the whole of pointing it somewhere.
    */
   api?: "anthropic-messages" | "openai-completions";
-  /** What Pi calls the model. An observation for its own logs; the bridge ignores it. */
+  /**
+   * The model id, which is only sometimes a name.
+   *
+   * It is what the provider is asked for, so it has to be that provider's own
+   * id — `anthropic/claude-sonnet-5` on OpenRouter, `claude-sonnet-5` on
+   * Anthropic. Left unset it defaults to the latter, which most routes have
+   * never heard of.
+   */
   model?: string;
   effort?: "low" | "medium" | "high";
   contextWindow?: number;
@@ -55,8 +62,8 @@ async function runTurn(options: PiOptions, context: HarnessContext): Promise<Har
   const executor = context.tools;
   const agent = new Agent({
     streamFn: streamSimple,
-    // A descriptor, not a client. `anthropic-messages` is the wire our bridge
-    // speaks, and the base URL is where it is listening.
+    // A descriptor, not a client: naming the wire and the base URL is the whole
+    // of pointing this loop at a provider.
     initialState: {
       systemPrompt: textOf(context.instructions),
       model: {

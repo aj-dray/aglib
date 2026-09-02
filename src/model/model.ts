@@ -71,7 +71,14 @@ export interface Model {
   generate(request: ModelRequest): AsyncGenerator<ModelDelta, Result<ModelResponse, ModelError>>;
 }
 
-/** Drains a generation and returns only its outcome. */
+/**
+ * Drains a generation and returns only its outcome.
+ *
+ * Not on the `aglib/model` subpath. It was, for a recipe that turned a `Model`
+ * into an Anthropic response; when that went, nothing outside the package
+ * consumed it. `Model`'s own contract above says what a caller who wants the
+ * whole response does, and this is the four lines of doing it.
+ */
 export async function collect(
   generation: AsyncGenerator<ModelDelta, Result<ModelResponse, ModelError>>,
 ): Promise<Result<ModelResponse, ModelError>> {
