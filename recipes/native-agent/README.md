@@ -1,15 +1,20 @@
-# native-agents
+# native-agent
 
 One operator, one machine, one `~/.agent`. The smallest thing that is still a
 real assistant: our own loop, one hand, a memory it edits, skills it loads,
 subagents it hands work to, and a choice of where commands run.
 
 ```bash
-bun run recipe native-agents                     # a conversation
-bun run recipe native-agents "what did I decide about pricing?"
-bun run recipe native-agents --sandbox docker --detail debug "check the disk usage"
-echo "how many sessions do I have?" | bun run recipe native-agents > answer.txt
+bun run recipe native-agent                     # a conversation
+bun run recipe native-agent "what did I decide about pricing?"
+bun run recipe native-agent --sandbox docker --detail detailed "check the disk usage"
+echo "how many sessions do I have?" | bun run recipe native-agent > answer.txt
 ```
+
+**What this shows.** The whole library surface in one program — the log, compaction, tools, the
+sandbox, and the queue that carries work between sessions — plus the one thing only our own loop can
+offer: a message reaching a busy session mid-turn, at the point where nothing is half-done. Memory,
+skills and channels are this recipe's own code, which is the split the library insists on.
 
 ## Multi-turn is the default, and it is not a flag
 

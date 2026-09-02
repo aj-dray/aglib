@@ -74,7 +74,7 @@ export async function main(task: string, options: Options = {}): Promise<string>
     compaction: { maxInputTokens: 120_000 },
   });
 
-  const identity = { id: "native-agents", version: "1" };
+  const identity = { id: "native-agent", version: "1" };
   const hands = [...bashTools(sandbox), ...skillTools(home.skills)];
 
   /**
@@ -162,5 +162,5 @@ if (import.meta.main) {
   const { choice, task } = parseArguments(process.argv.slice(2));
   console.error(`· ${choice.provider} · ${choice.model} · sandbox ${choice.sandbox}${choice.effort ? ` · effort ${choice.effort}` : ""}`);
   await main(task, { choice });
-  console.log(recipeMarker("native-agents"));
+  console.log(recipeMarker("native-agent"));
 }

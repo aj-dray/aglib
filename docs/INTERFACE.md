@@ -4,7 +4,7 @@ Everything an application touches: the SDK, and the shapes a CLI, HTTP API or UI
 
 ## The SDK
 
-The first useful agent fits on one screen — [`recipes/native-agents`](../recipes/native-agents/README.md)
+The first useful agent fits on one screen — [`recipes/native-agent`](../recipes/native-agent/README.md)
 is a real one. Imports perform no I/O. Defaults open no connection, database, process or sandbox.
 Every stateful dependency is passed in.
 
@@ -84,9 +84,9 @@ into it as `provider/model`, then had to split it back out — ambiguously, beca
 contain slashes themselves. One field, two facts.
 
 **Names leave this library as observations and never enter it as selections.** `ModelResponse.model`
-says what actually served, `entry.generation.model` records it, and `price` reads it. `effort` stays
-on the request, because how hard to think is a knob over one call rather than part of which model
-this is.
+says what actually served and `entry.generation.model` records it, which is what an application
+prices a run from. `effort` stays on the request, because how hard to think is a knob over one call
+rather than part of which model this is.
 
 ## Waiting for work
 
@@ -147,8 +147,8 @@ Docker providers say `"plain"`; a hosted provider that keeps the value out of th
 substitutes. Plain configuration
 goes in `env`, which is set for everything the box starts and is meant to be readable.
 
-`aglib/sandbox/conformance` and `aglib/store/conformance` are how a new adapter finds out whether it
-means what the port says. Each is an inert list of named cases; a subject declares what it actually
+`aglib/model/conformance`, `aglib/store/conformance` and `aglib/sandbox/conformance` are how a new
+adapter finds out whether it means what the port says. Each is an inert list of named cases; a subject declares what it actually
 enforces — its isolation, the postures it refuses, whether its output streams arrive apart, what it
 does with a secret — and the suite holds it to exactly that. A provider claiming to substitute is
 made to prove a process in the box cannot read the value.

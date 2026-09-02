@@ -5,8 +5,10 @@
 
 ## Definition
 
-A small TypeScript toolkit for building an application-owned agent harness, or for putting a
-stable application boundary around someone else's.
+A small TypeScript toolkit for building **production agents** — the kind with a durable log, a
+permission rule on every call, somewhere contained to run, and an answer for what happens when the
+process dies mid-turn. Build the harness yourself, or put a stable application boundary around
+someone else's.
 
 It lets a developer define an agent without choosing a framework, run it through a native loop or
 a conforming harness adapter, give it tools under an explicit permission rule, run those tools in a
@@ -31,13 +33,14 @@ a store. The agent definition does not change.
 > Does it change **what is recorded**, **who may act now**, or **what an adapter must prove**?
 > If not, it belongs in the application.
 
-And a second, sharper one: **does one of the two recipes call it?** If not, it does not exist.
+And a second, sharper one: **does one of the three recipes call it, or a conformance suite hold an adapter to it?** If neither, it does not exist.
 
 The third clause is not decoration. A port with several implementations is a promise about all of
-them, and the only way to keep it is an executable one — so `store` and `sandbox` each ship the
-cases an adapter must pass. That is also the boundary for money: rates fail the first clause outright
-(they change nothing that is recorded and go stale between releases), while the arithmetic over them
-passes it, because a ceiling that stops a run changes who may act now.
+them, and the only way to keep it is an executable one — so `model`, `store` and `sandbox` each ship
+the cases an adapter must pass. That is also the boundary for money: rates fail the first clause
+outright, because they change nothing that is recorded and go stale between releases. A ceiling over
+them fails it too, and that was learned rather than assumed — one shipped, went unused, and is
+described below.
 
 ## Principles
 
@@ -63,8 +66,8 @@ about a cycle, are application policy.
 
 Memory is five different things and only one is ours: working memory, which is the log plus
 compaction. Learned facts, skills, session search and retrieval are application code reaching the
-library through two seams — tools, and run-scoped context. Both recipes demonstrate this, which is
-why there is no `memory/` module and should not be one.
+library through two seams — tools, and run-scoped context. `recipes/native-agent` demonstrates
+this, which is why there is no `memory/` module and should not be one.
 
 ## What the log is worth when the loop is not ours
 
@@ -111,7 +114,8 @@ results, which is the last point at which nothing is half-done — so a `turn` d
 session and the session keeps its work. A harness that owns its own loop has no such point to offer,
 and there a `turn` delivery waits for the next activation instead. It is never promoted to ending the
 one that is running: a sender asking for the place that costs nothing does not get the one that costs
-a turn. The table in `recipes/vendored-agents` says which harness offers which.
+a turn. Our own loop is the only harness here that offers the point at all, which is why
+`recipes/native-agent` is where that difference is demonstrated.
 
 **Durable partial text on cancellation.** Streamed deltas are provisional. Committed entries are
 not.
@@ -121,8 +125,9 @@ consumed — the counts, and the cost where the provider stated one, which a rou
 response. It derives nothing and stops there. Published rates move faster than a release, so a table here would go stale with nothing
 failing to say so — and a ceiling over them would have to read a function the caller supplies and
 then defend against it, which is a lot of machinery for a decision that is the deployment's anyway.
-The three ceilings that do exist are over facts this package already holds: turns, tool calls, and
-the clock.
+One shipped anyway and no recipe ever passed it, which is how it was found; the gate cannot see an
+option nobody sets. The three ceilings that do exist are over facts this package already holds:
+turns, tool calls, and the clock — `maxTurns`, `maxToolCalls` and `deadline`.
 
 **That an interrupted activation is picked up.** The store can say which sessions were being worked
 when a process stopped existing, and a run can continue one from its committed log. Deciding to ask
@@ -141,9 +146,9 @@ everything a session has ever received.
 
 ## What makes it credible
 
-Not a feature matrix — proofs that fail loudly when they stop being true: both recipes run against
-the built package; the personal agent's whole memory system is built on the library without
-extending it; a stale write is refused with the real position rather than silently winning; a call
+Not a feature matrix — proofs that fail loudly when they stop being true: all three recipes run
+against the built package; `recipes/native-agent`'s whole memory system is built on the library
+without extending it; a stale write is refused with the real position rather than silently winning; a call
 that permission refuses finishes the run instead of parking it; and every exported value is composed
 by a recipe or deleted.
 

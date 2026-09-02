@@ -7,7 +7,7 @@ vendor dependency or an independent release cadence forces the split.
 
 ```text
 src/
-  json.ts  result.ts  content.ts  agent.ts  run.ts  render.ts
+  json.ts  result.ts  content.ts  agent.ts  run.ts  render.ts  terminal.ts
   session/    the log, its entries, and the projection to messages
   tools/      declaring and executing tools
   model/      the model port, its adapters, and the suite they answer
@@ -17,10 +17,13 @@ src/
 recipes/      the three applications that define the scope, one per answer to whose loop runs
 ```
 
-A port with more than one implementation ships `conformance.ts` beside it: an inert list of named
-cases that throw, exported on its own subpath. Inert because the package must not carry a test
-framework — an adapter runs the cases under whichever one it already has — and because a case that
-can be listed can also be skipped by name when the thing it needs is not there.
+A port whose contract is the same for every implementation ships `conformance.ts` beside it: an
+inert list of named cases that throw, exported on its own subpath. `model`, `store` and `sandbox`
+do. `harness` does not, and that is the distinction rather than an omission — what a harness must
+prove depends on what it declares, so `recovery: "history"` and `recovery: "none"` do not answer one
+list. Inert because the package must not carry a test framework — an adapter runs the cases under
+whichever one it already has — and because a case that can be listed can also be skipped by name
+when the thing it needs is not there.
 
 `ARCHITECTURE.md` owns what each module means and the direction between them.
 
@@ -102,8 +105,9 @@ by name rather than mocked. A fake daemon would prove only that the file calls t
 file calls; what needs proving is that a container answers the port the way a directory does, and
 only a container can say. So the gate runs the Docker cases wherever the daemon and the image are
 already there — no account, no network — and the ones that cost money or need a credential wait for
-an explicit opt-in: `DATABASE_URL` for the Postgres store, `AGLIB_LIVE_SANDBOX=1` for the hosted
-sandbox. A skip prints what would unlock it.
+an explicit opt-in: `AGLIB_LIVE_MODEL=1` for the recipe cases that reach a provider,
+`AGLIB_LIVE_ACP=1` for the ones that start a vendor's agent over `npx`. A skip prints what would
+unlock it.
 
 ## The gate
 

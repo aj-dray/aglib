@@ -1,5 +1,5 @@
 {
-  "name": "@aglib-recipe/native-agents",
+  "name": "@aglib-recipe/native-agent",
   "private": true,
   "type": "module",
   "dependencies": {
