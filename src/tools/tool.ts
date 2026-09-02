@@ -24,8 +24,15 @@ export interface ToolContext {
    * This is the whole of agent-to-agent messaging: spawning a child, replying
    * to a parent and messaging a peer are the same call, and either the sending
    * turn commits with the delivery or neither happens.
+   *
+   * `from` is not yours to state. The executor stamps this session, because a
+   * tool that supplied its own sender could omit it — losing the provenance a
+   * recipient reads to tell a peer's message from its user's — or claim to be
+   * a session it is not. It was a value two callers each rebuilt from
+   * `sessionId`, which is a second field for a fact another field already
+   * determines.
    */
-  enqueue(delivery: Delivery): void;
+  enqueue(delivery: Omit<Delivery, "from">): void;
   /** Progress for a live viewer. Never recovery state. */
   report(data: JsonValue): void;
 }

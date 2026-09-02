@@ -57,7 +57,6 @@ export function spawnTools(input: { store: Store; agent: { id: string; version: 
         call.enqueue({
           sessionId: child,
           input: given ? `${goal}\n\nContext you were given:\n${given}` : goal,
-          from: { kind: "session", id: call.sessionId },
         });
         return { content: `Subagent ${child} started. Its report will arrive as a message.` };
       },
