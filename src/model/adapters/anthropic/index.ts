@@ -150,15 +150,32 @@ export function createAnthropicModel(options: AnthropicOptions): Model {
 }
 
 /**
- * Text blocks rather than one joined string, so the end of the prefix can carry
- * a breakpoint. Only the last block is marked: a breakpoint caches everything
- * before it, so marking each one would buy nothing and spend the budget of four.
+ * Text blocks rather than one joined string, so the prefix can carry
+ * breakpoints.
+ *
+ * Two are marked: the **first** block and the **last**. A breakpoint caches
+ * everything before it, so the last one is what makes the whole prefix
+ * reusable across a conversation's turns — and marking every block between
+ * would buy nothing while spending a budget of four.
+ *
+ * The first earns its own for a different reason. The first block is an agent's
+ * standing instructions, which are identical for every conversation it serves;
+ * everything after it is composed per conversation and changes with it. With
+ * one breakpoint at the end, a new conversation shares nothing: its prefix
+ * differs from the last one somewhere in the middle, so the whole of it is
+ * written again, instructions included. With one at the head, the instructions
+ * are read from cache by every conversation and only what actually differs is
+ * paid for — which is the common case for an agent serving many callers at
+ * once, and free where there is only one.
+ *
+ * Skipped when there is a single block: the two marks would be the same one.
  */
 function encodeSystem(blocks: readonly string[], cache: boolean): unknown[] {
+  const marked = new Set(blocks.length > 1 ? [0, blocks.length - 1] : [blocks.length - 1]);
   return blocks.map((text, index) => ({
     type: "text",
     text,
-    ...(cache && index === blocks.length - 1 ? { cache_control: { type: "ephemeral" } } : {}),
+    ...(cache && marked.has(index) ? { cache_control: { type: "ephemeral" } } : {}),
   }));
 }
 
