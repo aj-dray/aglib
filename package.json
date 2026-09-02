@@ -1,6 +1,6 @@
 {
   "name": "@a-dray/aglib",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "A small TypeScript toolkit for building your own agent harness.",
   "license": "MIT",
