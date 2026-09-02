@@ -121,6 +121,7 @@
     "recipe": "bun run build && bun scripts/recipe.ts",
     "docs": "bun scripts/docs.ts",
     "docs:check": "bun scripts/docs.ts --check",
+    "release": "bun scripts/release.ts",
     "node:verify": "node scripts/node-verify.mjs",
     "prepack": "bun run build"
   }

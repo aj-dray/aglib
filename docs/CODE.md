@@ -126,10 +126,11 @@ while blind.
 
 The package is `@a-dray/aglib` on npm — the unscoped name is a lookalike of an existing package —
 and `version` in `package.json` is the only place a version is written. A consumer aliases it so
-imports stay `aglib`: `bun add aglib@npm:@a-dray/aglib@<version>`. A release is a commit that sets it, tagged `v<version>`: pushing the tag runs
-`.github/workflows/publish.yml`, which refuses a tag that disagrees with the manifest, runs the gate,
-and publishes through npm's trusted publishing — the workflow is the credential, so no token is
-held anywhere. Pre-1.0, a fix bumps the patch and a changed contract bumps the minor; there are no
+imports stay `aglib`: `bun add aglib@npm:@a-dray/aglib@<version>`. A release is a commit that sets it, tagged `v<version>`, and `bun run release patch|minor|<version>`
+on a clean, pushed `main` is the one way to write both: it runs the gate, commits the bump, tags,
+and pushes. Pushing the tag runs `.github/workflows/publish.yml`, which refuses a tag that disagrees
+with the manifest, runs the gate again, and publishes through npm's trusted publishing — the
+workflow is the credential, so no token is held anywhere. Pre-1.0, a fix bumps the patch and a changed contract bumps the minor; there are no
 deprecation aliases, so a consumer pins an exact version and moves on purpose.
 
 ## Deferred
