@@ -56,9 +56,9 @@ output, another subsystem, or a question nobody asked.
 
 There were two until recently. `toolUse` claimed to say whose tools ran, and it went because it
 answered none of the three questions it was conflating — whose tools, whose code, whose authority —
-reliably. A harness can run a *vendor's* tools through our executor, and can run tools *we wrote*
-inside its own process; the table under "What each route can and cannot do" says both accurately,
-and nothing branched on the enum. Should authorization provenance ever be needed, it is a fact about
+reliably. A harness can run a *vendor's* tools through our executor, and can be handed tools
+*we wrote* to reach over a boundary it opens rather than through ours; the table under "What each
+route can and cannot do" says both accurately, and nothing branched on the enum. Should authorization provenance ever be needed, it is a fact about
 a call and belongs on the tool entry, not back on the harness.
 
 ## Concurrency
@@ -272,40 +272,47 @@ why `finish` takes it from the result and not from whatever happened to stream.
 
 One table, because this is the question every application asks and the answer is
 easy to get wrong by hoping. What varies is not how much of the agent you get —
-all four run inside one log, one sandbox and one permission decision — but **who
+all three run inside one log, one sandbox and one permission decision — but **who
 holds the conversation**.
 
-| | our loop | Pi, from its library | Claude Code, from its SDK | anything, over ACP |
-| --- | --- | --- | --- | --- |
-| System prompt | ours | ours | its preset, ours appended | **none** — orientation leads the first message |
-| Its own tools | none to have | **values we can import**, re-pointed at our sandbox | **names only** — enable or disable, never take | **cannot be removed**, only refused |
-| Our tools | the executor | the same executor | an in-process MCP server | an MCP server it connects to |
-| Transcript | the log | **assignable** — `state.messages` from the log | its own | its own |
-| Continues a conversation by | reading the log | reading the log | `resume`, its session id | `session/load`, its session id |
-| `recovery` | `history` | `history` | `none` | `none` |
-| Resumable from our log after a crash | **yes** | **yes** | no | no |
-| Handed to a different harness mid-session | **yes** | **yes** | no | no |
+| | our loop | Pi, from its library | anything, over ACP |
+| --- | --- | --- | --- |
+| System prompt | ours | ours | **none** — orientation leads the first message |
+| Its own tools | none to have | **values we can import**, re-pointed at our sandbox | **cannot be removed**, only refused |
+| Our tools | the executor | the same executor | an MCP server it connects to |
+| Transcript | the log | **assignable** — `state.messages` from the log | its own |
+| Continues a conversation by | reading the log | reading the log | `session/load`, its session id |
+| `recovery` | `history` | `history` | `none` |
+| Resumable from our log after a crash | **yes** | **yes** | no |
+| Handed to a different harness mid-session | **yes** | **yes** | no |
+
+There is a tier between the last two columns, and it is worth knowing before
+choosing a vendor: an agent shipped as a **process SDK** rather than a library.
+Its tools are names you enable rather than values you take, so they run where it
+runs; its prompt is composable; its transcript is its own. `recipes/vendored-agent`
+carried one for a while and its README says what that measured. The column is not
+here because the route is not: what a table of routes may claim is what this
+repository can run.
 
 The last two rows are the same fact twice, and it is the fact worth choosing on.
 Where a vendor exposes its transcript as something we assign, our log is the
 only thing that decides what the agent knows — so an interrupted run can be
 finished, and a session our loop began can be continued by Pi, which
-`recipes/vendored-agents` proves against a live model. Where the vendor keeps
+`recipes/vendored-agent` proves against a live model. Where the vendor keeps
 its own context, that context is a second copy we cannot write, and both of
 those become no.
 
-Nothing here can be improved by trying harder. The Claude Agent SDK and the
-protocol both accept a *user* turn or an instruction to load their own session,
-and neither accepts a conversation we assembled — their surface, not our design.
-It is not the log falling short either: a `ContentPart` of kind `opaque` exists
-so a provider's own blocks survive verbatim, ready to be handed back.
+Nothing here can be improved by trying harder. A vendor that keeps its own
+context accepts a *user* turn or an instruction to load its own session, and
+none accepts a conversation we assembled — their surface, not our design. It is
+not the log falling short either: a `ContentPart` of kind `opaque` exists so a
+provider's own blocks survive verbatim, ready to be handed back.
 
-There is one supported way it could change. The SDK takes a `sessionStore`, and
-`load()` returns whatever we give it, so a store that generated the SDK's
-entries from ours would be the translation. It is not built, and the reason is
-that `SessionStoreEntry` types the container and not the entries: their meaning
-is that SDK's internal transcript format, which is not a contract anyone has
-promised to keep.
+Where a vendor does offer a hook for its own transcript store, what goes through
+it is that vendor's internal format rather than a contract anyone has promised to
+keep — so translating our log into it would be building on a shape that can move
+under us without notice. `assignable` is the property worth choosing on precisely
+because it is the one a vendor has to have declared.
 
 ## Deployment responsibilities
 
@@ -326,8 +333,8 @@ than assumed. A `Secret` is handed to `create`, and the sandbox reports `"substi
 `"plain"`: neither the local provider nor the Docker one can keep a value out of a process it
 starts, and both say so. A hosted adapter that stores the secret with its vendor and mounts a
 reference gives the box an opaque handle, and the value is substituted at egress for the hosts that
-credential declared. Harnesses split on the same fact — the SDK harness runs
-Claude Code in the service's process and so holds the credential there, and the protocol harness
+credential declared. Harnesses split on the same fact — the Pi harness runs the
+vendor's loop in the service's process and so holds the credential there, and the protocol harness
 starts its agent inside the box and does not.
 
 Durable entries may contain prompts, model output, tool arguments and results; protect them as

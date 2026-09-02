@@ -6,38 +6,24 @@ import { z } from "zod";
 import { createLocalSandboxProvider } from "aglib/sandbox/adapters/local";
 import { createNativeHarness } from "aglib/harness";
 import { createOpenRouterModel } from "aglib/model/adapters/openai-compatible";
-import { serveAnthropicWire } from "./wire.ts";
-import { createClaudeCodeHarness } from "./claude-code.ts";
+import { routeTo } from "./route.ts";
 import { createPiHarness } from "./pi.ts";
 import { sandboxTools } from "./tools.ts";
+import { piCodingTools } from "./pi-tools.ts";
 import { defaultChoice, main } from "./index.ts";
+import { runCommand, patched } from "./commands.ts";
 
-test("Claude Code keeping its own tools refuses a sandbox it cannot reach", async () => {
-  // Nothing is started: the refusal is the point. Its built-in tools run in
-  // this process, so calling a container "contained" while they are in place
-  // would be the simulated guarantee this library exists to avoid.
-  const harness = createClaudeCodeHarness({
-    sandbox: { isolation: "container", root: "/home/user" } as never,
-    tools: "theirs",
-  });
-  const result = await harness.run({
-    sessionId: "s", runId: "r", instructions: "",
-    history: () => [], entries: () => [],
-    commit: async () => {}, emit: () => {}, signal: new AbortController().signal,
-  });
-  expect(result.status).toBe("failed");
-  if (result.status !== "failed") return;
-  expect(result.error.code).toBe("unsupported");
-});
-
-test("only the harness that can be seeded from the log claims recovery", () => {
-  const claude = createClaudeCodeHarness({ sandbox: { isolation: "none" } as never, tools: "ours" });
+/**
+ * The one claim a vendor harness here is allowed to make about recovery.
+ *
+ * `history` is not a preference — it is the observation that `state.messages`
+ * is a field we assign, so the committed log decides what the agent knows. A
+ * vendor whose context lives in its own process cannot say this, which is why
+ * `coding-agent`'s ACP harness says `none` and `runAgent` closes an interrupted
+ * session rather than handing it out for ever.
+ */
+test("the harness seeded from the log is the one that claims recovery", () => {
   const pi = createPiHarness({ baseUrl: "http://127.0.0.1:1", token: "t" });
-
-  // Claude Code owns its context, so an interrupted run is over and `runAgent`
-  // closes the session rather than handing it out again. Pi's transcript is
-  // assigned from committed entries every activation, so it can be continued.
-  expect(claude.recovery).toBe("none");
   expect(pi.recovery).toBe("history");
 });
 
@@ -50,87 +36,58 @@ test("only the harness that can be seeded from the log claims recovery", () => {
 const live = process.env["AGLIB_LIVE_MODEL"] === "1" ? process.env["OPENROUTER_API_KEY"] : undefined;
 const liveTest = live ? test : test.skip;
 
-for (const which of ["claude-code", "pi"] as const) {
-  liveTest(`${which} runs in our log, with our hands, on a model behind the port`, async () => {
-    const provider = createLocalSandboxProvider({ root: process.cwd() });
-    const opened = await provider.create({ isolation: "none", network: { mode: "unrestricted" } });
-    expect(opened.ok).toBe(true);
-    if (!opened.ok) return;
-    const sandbox = opened.value;
+/** OpenRouter's id for it, which is what a direct route asks for. */
+const liveModel = "anthropic/claude-sonnet-5";
+const liveOpenRouter = () =>
+  createOpenRouterModel({ apiKey: live!, model: liveModel, appName: "aglib-vendored-agent" });
 
-    const wire = serveAnthropicWire({
-      model: createOpenRouterModel({ apiKey: live!, model: "anthropic/claude-sonnet-5", appName: "aglib-vendored-agents" }),
-    });
-    const instructions = "You are a careful assistant working inside a sandbox. Be brief.";
-    const agent: Agent = which === "pi"
-      ? {
-          id: "t", version: "1", instructions,
-          harness: createPiHarness({ baseUrl: wire.url, token: wire.token }),
-          tools: sandboxTools(sandbox),
-        }
-      : {
-          id: "t", version: "1", instructions,
-          harness: createClaudeCodeHarness({
-            sandbox, tools: "ours",
-            env: {
-              ...process.env as Record<string, string>,
-              ANTHROPIC_BASE_URL: wire.url,
-              ANTHROPIC_AUTH_TOKEN: wire.token,
-              ANTHROPIC_API_KEY: wire.token,
-              ANTHROPIC_MODEL: "claude-sonnet-5",
-              ANTHROPIC_SMALL_FAST_MODEL: "claude-sonnet-5",
-            },
-          }),
-        };
+/** Pi on the route the recipe gives it: straight to OpenRouter, on the wire Pi speaks. */
+const livePi = () => routeTo("openrouter");
 
-    const database = new Database(":memory:");
-    const store = createSqliteStore({ database });
-    const sessionId = crypto.randomUUID();
-    const run = runAgent({
-      agent, store, sessionId,
-      input: "Run `echo aglib-was-here` with bash, then report exactly what it printed.",
-    });
-    for await (const _ of run) { /* the log is the record */ }
-    const result = await run.result;
+liveTest("pi runs in our log, with our hands, on a model behind the port", async () => {
+  const provider = createLocalSandboxProvider({ root: process.cwd() });
+  const opened = await provider.create({ isolation: "none", network: { mode: "unrestricted" } });
+  expect(opened.ok).toBe(true);
+  if (!opened.ok) return;
+  const sandbox = opened.value;
 
-    await wire.close();
-    await sandbox.close();
-    expect(result.status).toBe("completed");
+  const route = livePi();
+  const agent: Agent = {
+    id: "t", version: "1",
+    instructions: "You are a careful assistant working inside a sandbox. Be brief.",
+    harness: createPiHarness({
+      baseUrl: route.baseUrl, token: route.token, api: route.api, model: liveModel,
+    }),
+    tools: sandboxTools(sandbox),
+  };
 
-    // The point of wrapping a vendor harness at all: what it did is in *our*
-    // log, in our vocabulary, whoever's loop produced it.
-    const types = (database.query("SELECT body FROM entries ORDER BY seq").all() as { body: string }[])
-      .map((row) => (JSON.parse(row.body) as { type: string }).type);
-    expect(types).toContain("assistant");
-    expect(types).toContain("tool.started");
-    expect(types).toContain("tool.finished");
-    await store.close();
-  }, 300_000);
-}
-
-/**
- * The gap this recipe had: an agent that keeps its own context was told
- * nothing about the last turn, so a second question landed on a stranger.
- * Pi never had it — its transcript is assigned from the log every activation —
- * which is the whole of what `recovery: "history"` is claiming.
- */
-liveTest("claude-code remembers the turn before, because it is handed its own session back", async () => {
-  const said: string[] = [];
-  await main("", {
-    choice: { ...defaultChoice, harness: "claude-code", tools: "ours" },
-    turns: (async function* () {
-      yield "Remember the number 4127. Reply with just: noted.";
-      yield "What number did I just ask you to remember? Reply with just the number.";
-    })(),
-    sink: { write: (text) => said.push(text), status: () => {} },
+  const database = new Database(":memory:");
+  const store = createSqliteStore({ database });
+  const sessionId = crypto.randomUUID();
+  const run = runAgent({
+    agent, store, sessionId,
+    input: "Run `echo aglib-was-here` with bash, then report exactly what it printed.",
   });
-  expect(said.join("")).toContain("4127");
+  for await (const _ of run) { /* the log is the record */ }
+  const result = await run.result;
+
+  await sandbox.close();
+  expect(result.status).toBe("completed");
+
+  // The point of wrapping a vendor harness at all: what it did is in *our*
+  // log, in our vocabulary, whoever's loop produced it.
+  const types = (database.query("SELECT body FROM entries ORDER BY seq").all() as { body: string }[])
+    .map((row) => (JSON.parse(row.body) as { type: string }).type);
+  expect(types).toContain("assistant");
+  expect(types).toContain("tool.started");
+  expect(types).toContain("tool.finished");
+  await store.close();
 }, 300_000);
 
 liveTest("pi remembers the turn before, from the log rather than its own memory", async () => {
   const said: string[] = [];
   await main("", {
-    choice: { ...defaultChoice, harness: "pi" },
+    choice: { ...defaultChoice },
     turns: (async function* () {
       yield "Remember the number 8315. Reply with just: noted.";
       yield "What number did I just ask you to remember? Reply with just the number.";
@@ -156,9 +113,7 @@ liveTest("pi is put back where a killed worker left it, from our log alone", asy
   expect(opened.ok).toBe(true);
   if (!opened.ok) return;
 
-  const wire = serveAnthropicWire({
-    model: createOpenRouterModel({ apiKey: live!, model: "anthropic/claude-sonnet-5", appName: "aglib-vendored-agents" }),
-  });
+  const route = livePi();
 
   let ran = 0;
   const ledger = defineTool({
@@ -173,7 +128,7 @@ liveTest("pi is put back where a killed worker left it, from our log alone", asy
   const agent = {
     id: "t", version: "1",
     instructions: "Answer from the ledger. Be brief.",
-    harness: createPiHarness({ baseUrl: wire.url, token: wire.token }),
+    harness: createPiHarness({ baseUrl: route.baseUrl, token: route.token, api: route.api, model: liveModel }),
     tools: [ledger],
   };
 
@@ -194,7 +149,6 @@ liveTest("pi is put back where a killed worker left it, from our log alone", asy
     agent, store, claim: { sessionId: "s", seq: 4, pending: [], metadata: {} },
   }).result;
 
-  await wire.close();
   await opened.value.close();
 
   expect(result.status).toBe("completed");
@@ -219,14 +173,11 @@ liveTest("pi is put back where a killed worker left it, from our log alone", asy
  * because there is only one representation of a conversation here.
  *
  * This is the property that does not hold for a harness whose context lives in
- * the vendor. Swap Pi for Claude Code below and the second turn arrives at an
- * agent with no idea what "that number" refers to, which is the whole content
- * of `recovery: "none"`.
+ * the vendor. There the second turn arrives at an agent with no idea what "that
+ * number" refers to, which is the whole content of `recovery: "none"`.
  */
 liveTest("a session started by one harness is continued by another, through the log alone", async () => {
-  const wire = serveAnthropicWire({
-    model: createOpenRouterModel({ apiKey: live!, model: "anthropic/claude-sonnet-5", appName: "aglib-vendored-agents" }),
-  });
+  const route = livePi();
   const store = createSqliteStore({ database: new Database(":memory:") });
   const sessionId = crypto.randomUUID();
   const instructions = "Be brief. Answer with as few words as possible.";
@@ -234,9 +185,7 @@ liveTest("a session started by one harness is continued by another, through the 
   const ours = await runAgent({
     agent: {
       id: "t", version: "1", instructions,
-      harness: createNativeHarness({
-        model: createOpenRouterModel({ apiKey: live!, model: "anthropic/claude-sonnet-5", appName: "aglib-vendored-agents" }),
-      }),
+      harness: createNativeHarness({ model: liveOpenRouter() }),
     },
     store, sessionId, input: "Remember the number 5150. Reply with just: noted.",
   }).result;
@@ -245,36 +194,78 @@ liveTest("a session started by one harness is continued by another, through the 
   const theirs = await runAgent({
     agent: {
       id: "t", version: "1", instructions,
-      harness: createPiHarness({ baseUrl: wire.url, token: wire.token }),
+      harness: createPiHarness({ baseUrl: route.baseUrl, token: route.token, api: route.api, model: liveModel }),
     },
     store, sessionId, input: "What number did I ask you to remember? Reply with just the number.",
   }).result;
 
-  await wire.close();
   expect(theirs.status).toBe("completed");
   if (theirs.status !== "completed") return;
   expect(textOf(theirs.output)).toContain("5150");
   await store.close();
 }, 300_000);
 
-test("switching harness says which answer you are about to get", async () => {
-  const said: string[] = [];
-  const sink = { write: (text: string) => said.push(text), status: (line: string) => said.push(line) };
-  const seen: string[] = [];
+/**
+ * One list, and what each choice costs.
+ *
+ * `tools` is the axis the recipe exists for, and it is reachable in two lines
+ * that say what the choice means before it is made. It used to be argv-only,
+ * so seeing what "theirs" buys took a second run.
+ *
+ * Driven through `runCommand` rather than `main`, because `main` opens a route
+ * and a route needs a credential — and this gate is offline. A version of this
+ * that called `main` passed here and would have failed on a clean checkout.
+ */
+test("one list of what this recipe lets you change, and a number picks a value", () => {
+  const lines: string[] = [];
+  const sink = { write: () => {}, status: (line: string) => lines.push(line) };
+  const choice = { ...defaultChoice };
 
-  await main("", {
-    choice: { ...defaultChoice, harness: "pi" },
-    // No model is ever reached: every line here is a command.
-    turns: (async function* () { yield "/harness claude-code"; yield "/harness pi"; yield "/model openrouter"; })(),
-    model: { id: "unused", async *generate() { seen.push("asked"); throw new Error("no turn should reach a model"); } } as never,
-    sink,
-  });
+  const listed = runCommand({ line: "/options", choice, sink });
+  // Everything it lets you change, with where each one stands.
+  expect(lines.join("")).toContain("tools");
+  expect(lines.join("")).toContain("theirs");
+  expect(listed.choosing?.axis).toBeNull();
 
-  const text = said.join("");
-  // The distinction this recipe exists for, said at the moment it bites.
-  expect(text).toContain("Claude Code keeps its own context");
-  expect(text).toContain("Pi reads the committed log");
-  // A provider with no model is a half-finished instruction.
-  expect(text).toContain("Name a model too");
-  expect(seen).toEqual([]);
+  lines.length = 0;
+  const opened = runCommand({ line: "1", choice, sink, choosing: listed.choosing });
+  // Drilling in is not choosing: no value is set by opening a list.
+  expect(opened.set).toBeUndefined();
+  expect(opened.choosing?.axis).toBe("tools");
+
+  const picked = runCommand({ line: "1", choice, sink, choosing: opened.choosing });
+  expect(picked.set).toEqual({ axis: "tools", value: "ours" });
+  // The consequence, said before the move rather than discovered after it.
+  expect(lines.join("")).toContain("validated here and gated by `decide`");
+  expect(patched(choice, picked.set!.axis, picked.set!.value).tools).toBe("ours");
+
+  // An axis with no list is answered by the next line, whatever it says.
+  lines.length = 0;
+  const relisted = runCommand({ line: "/options", choice, sink });
+  const named = runCommand({ line: "3", choice, sink, choosing: relisted.choosing });
+  expect(named.choosing).toEqual({ axis: "model", label: "model", choices: [] });
+  const typed = runCommand({ line: "openai/gpt-5", choice, sink, choosing: named.choosing });
+  expect(typed.set).toEqual({ axis: "model", value: "openai/gpt-5" });
+});
+
+/**
+ * The union that never ran.
+ *
+ * `--tools both` used to offer Pi's tools *and* ours in one list. Against a
+ * vendor whose tools arrive namespaced inside its own process that is the
+ * interesting mode; against Pi, `state.tools` is one flat list and both sides
+ * call their shell `bash`, so `createExecutor` refused it before a turn began.
+ * The names are the evidence, and this is what makes the axis two values.
+ */
+test("ours and Pi's are the same three jobs, which is why there is no union", async () => {
+  const provider = createLocalSandboxProvider({ root: process.cwd() });
+  const opened = await provider.create({ isolation: "none", network: { mode: "unrestricted" } });
+  expect(opened.ok).toBe(true);
+  if (!opened.ok) return;
+
+  const theirs = piCodingTools(opened.value).map((tool) => tool.spec.name);
+  const ours = sandboxTools(opened.value).map((tool) => tool.spec.name);
+  expect(theirs).toContain("bash");
+  expect(ours).toContain("bash");
+  await opened.value.close();
 });

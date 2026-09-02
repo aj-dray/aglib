@@ -48,8 +48,8 @@ test("the answer and the account of the run go to different channels", async () 
 });
 
 test("an assistant entry prints its text only when nothing streamed it first", async () => {
-  // Our loop and Pi stream tokens; the Claude Code SDK emits one delta per
-  // whole message; a harness may emit none. All three have to render once.
+  // Harnesses disagree about deltas: some stream tokens, some emit one delta
+  // per whole message, some emit none. All three have to render once.
   const streamed = harness();
   await renderRun(runOf([
     { type: "text.delta", text: "hello" },

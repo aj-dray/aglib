@@ -1,13 +1,19 @@
-# vendored-agents
+# vendored-agent
 
 Build your own harness *from* somebody else's agent library rather than from
 scratch — keeping their tools, adding yours, inside your log, your sandbox and
-your model port.
+your executor.
 
 ```bash
-bun run recipe vendored-agents --harness pi --tools theirs "what is in this directory?"
-bun run recipe vendored-agents --harness claude-code --tools both "tidy the imports in src/"
+bun run recipe vendored-agent --tools theirs "what is in this directory?"
+bun run recipe vendored-agent --tools theirs --sandbox docker "tidy the imports in src/"
+bun run recipe vendored-agent --tools ours --provider anthropic --model claude-sonnet-5 "read package.json"
 ```
+
+**What this shows.** What a vendor's library has to expose for your log to remain the state — and
+what composing one looks like when it does. Pi's coding agent is *composed*, not launched: its tools
+are values you re-point at your sandbox, its transcript is a field you assign from the committed
+log, and its model is a descriptor you aim at a provider. Three seams, three fields, no translation.
 
 ## Their tools are not all the same kind of thing
 
@@ -15,12 +21,12 @@ This is the finding the recipe exists for. "Reuse the vendor's tools" means
 three different things depending on what the vendor ships, and only one of them
 lets you keep your own guarantees.
 
-| | Pi | Claude Code SDK | ACP (`coding-agents`) |
+| | **library** (Pi) | **process SDK** (Claude Code) | **protocol** (ACP, `coding-agent`) |
 | --- | --- | --- | --- |
 | Their tools are | **values** you can import | **names** you can enable | a **fact** you observe |
-| Can you re-point them at a sandbox? | yes — every one takes an `operations` seam | no, they run in the agent's process | no |
+| Re-point them at a sandbox? | yes — each takes an `operations` seam | no, they run in the agent's process | no |
 | Do their calls reach your executor? | yes | no | no |
-| Can you add yours beside theirs? | yes, same list | yes, as an MCP server | no |
+| Add yours beside theirs? | yes — `state.tools` is one list you fill | as an MCP server, in their process | no |
 | Seed the transcript from your log? | yes — `state.messages` | no | no |
 | `recovery` | `history` | `none` | `none` |
 
@@ -32,130 +38,130 @@ guidance verbatim while the shell it runs and the files it reads are ours. The
 model sees the tool exactly as Pi wrote it; we validate its arguments and
 `decide` gates the call.
 
-**Claude Code's built-ins can only be named.** They live inside the agent
-process, so `--tools theirs` and `--tools both` keep tools that reach *this
-machine* — which is why either one refuses a sandbox that is not this machine.
-`--tools both` is the interesting mode: keep its editing tools, which are good,
-and add yours beside them.
+`state.tools` is one flat list we fill, so a tool this application owns — a
+memory, a delegation, whatever it is actually for — goes in beside Pi's and is
+gated identically. The axis is two values rather than three because *these*
+three of ours are the same three jobs Pi already does, and better: there was a
+`--tools both` that put both lists together, and against Pi it never ran a turn,
+because our `bash` and Pi's `bash` are one name and `createExecutor` refuses a
+duplicate. It only ever worked for a vendor whose tools arrived namespaced
+inside its own process, which is the vendor that is no longer here.
 
-## Where their requests go
+## Why the Claude Code SDK is not here
 
-Both agents speak wires that real providers already serve, so they go straight
-there. `route.ts` picks one of three:
+It was, and removing it is the second finding. The SDK is a **process wrapper**,
+not an agent library, so the middle column above is what you actually get:
 
-| provider | Claude Code | Pi |
-| --- | --- | --- |
-| `anthropic` | its own API | the Anthropic wire |
-| `openrouter` | **OpenRouter's Anthropic endpoint** — "Claude Code speaks its native protocol directly to OpenRouter. No local proxy server is required." | OpenRouter's OpenAI endpoint, which pi-ai already ships a descriptor for |
-| anything else | the bridge | the bridge |
+- Its built-in tools can only be *named*. They live inside the agent process and
+  reach this machine, so keeping them meant refusing every sandbox that was not
+  this machine — a container it could not honestly be run in. It is also what
+  `--tools both` was for: ours arrived namespaced as an MCP server, so the two
+  sets could not collide. On a vendor that hands you its tools as values they
+  share one namespace, and ours were duplicates of its own.
+- Its context is its own. `state.messages` has no equivalent, so continuing a
+  conversation meant handing back a session id and holding it somewhere, and
+  `recovery: "none"` meant an interrupted run was simply over.
+- It speaks Anthropic's wire and nothing else, so pointing it at a `Model` of
+  ours took ~490 lines of local server impersonating Anthropic — for the one
+  vendor that could not be told where to look. Pi is told in three fields.
 
-An earlier version sent *everything* through the bridge, so the two cases that
-needed nothing paid for the one that did. Going direct restores prompt caching:
-a second turn now reports something like `4 in · 9.5k cached`, where the bridge
-had been stripping `cache_control` and re-sending the whole prefix at full price
-every turn.
-
-## The bridge, and what it costs
-
-`serveAnthropicWire` puts a socket in front of `anthropic-wire.ts`, which turns
-an Anthropic request into a `ModelRequest`, calls any `Model`, and turns the
-answer back into Anthropic's frames. It is how a model speaking neither wire
-drives Claude Code — the same job Ollama's Anthropic endpoint does for a local
-model. `--bridge` forces it even where the provider would have served the wire
-itself, which is how it stays exercised.
-
-It is a recipe file and not package surface. The distinction is between a client
-and an impersonation: `adapters/anthropic` sends on a wire Anthropic publishes;
-this claims to *be* Anthropic to something that believes it. A partial
-impersonation is a promise a library cannot keep, because keeping it means
-tracking somebody else's protocol for ever.
-
-What it still costs, stated rather than discovered:
-
-- **Input tokens arrive late.** A `Model` reports what it spent when the
-  generation *returns*; the wire wants that count before the first delta. The
-  counts go out on `message_delta` instead, and a client reading usage only from
-  `message_start` records none. Buffering the whole response would fix it and
-  would end streaming.
-- **No token counting.** `/v1/messages/count_tokens` is deliberately not served:
-  counting for a model whose tokenizer we do not have is a guess feeding a
-  client's compaction decisions. Absent, the client uses its own estimate.
-- **Effort is bucketed.** A `thinking` budget maps to our three levels against
-  the numbers the Claude Code harness itself sets, so a round trip returns what
-  it asked for and anything else is approximate.
+That tier is real and worth knowing about, which is why the table keeps it. It
+is documented here rather than carried in code because the code cost more than
+the second data point returned: two model-wiring bugs traced to driving a vendor
+through environment variables instead of composed values, and a translation
+layer whose only customer it was. `coding-agent` still covers the
+what-you-give-up end of the argument, over a protocol, for any agent at all —
+including Claude Code, which has an ACP row there.
 
 ## What the harness no longer declares
 
 An earlier version of the `Harness` port carried `toolUse: "application" |
 "harness" | "none"`. This recipe is what removed it. Pi runs the *vendor's*
-tools through our executor; Claude Code with `--tools ours` runs tools *we
-wrote* inside its own process. Whose tools, whose code and whose authority are
-three questions, and one enum answered none of them reliably. The comparison
-above says it accurately, and prose is the right place for a fact about
-adapters.
+tools through our executor; a process-SDK harness runs tools *we wrote* inside
+its own process. Whose tools, whose code and whose authority are three
+questions, and one enum answered none of them reliably.
 
 The question it reached for — did anyone authorize this call — is a property of
-a call rather than a harness, and with `--tools both` it genuinely varies within
-one run. It belongs on the tool entry if something ever needs to read it.
+a call rather than a harness, and it varies within a run the moment an
+application tool sits beside a vendor's. It belongs on the tool entry if
+something ever needs to read it.
 
 ## Holding a conversation
 
-The three harnesses continue a conversation two different ways, and the
-difference is exactly what `recovery` declares.
-
 **Pi is handed our log.** `transcriptFor` assigns `state.messages` from
-`context.history()` every activation, so the committed log is the only thing
+`context.history()` on every activation, so the committed log is the only thing
 that decides what it knows. That is `recovery: "history"`, and it means an
-interrupted run can be picked up and finished.
+interrupted run can be picked up and finished — which `harness.test.ts` proves
+by staging exactly what a killed worker leaves (a committed tool result, no
+terminal entry) and having Pi finish it.
 
-**Claude Code is handed its own name for the conversation.** Its context, its
-prompt cache and its own compaction live in the agent, so continuing means
-passing `resume` — the session id it reported when it started, held for the life
-of this process and handed back on the next turn. That is `recovery: "none"`:
-what matters is over there, so our entries describe what happened without being
-able to put it back.
+Nothing is held between turns, and that is the point. A harness whose context
+lives in the vendor needs a session id threaded through every turn and a
+decision about where it survives a restart. This one needs neither, because the
+answer is already in the store.
 
-Where that id should live across a restart is a question this recipe does not
-answer. Its store is in memory, so there is nothing to survive; a deployment
-that wanted continuity across restarts would keep it in the session's metadata,
-which is what metadata is for.
+It also means the log is genuinely the interchange: one session, two harnesses —
+our own loop answers the first turn and Pi answers the second, having never seen
+it happen. Nothing is translated and nothing is handed over, because there is
+only one representation of a conversation here.
 
-Feeding it our log instead would have worked and was the other real option: it
-would make the log authoritative and survive the agent forgetting. It also
-means paying to re-send the whole conversation to an agent that already has it,
-every turn, and fighting the context management that is much of what buying
-into an SDK is for.
+## Where its requests go
+
+A pi-ai model is a *description* of an endpoint — an id, a wire and a base URL —
+rather than a client, so `route.ts` is a table:
+
+| provider | endpoint | wire |
+| --- | --- | --- |
+| `openrouter` | `openrouter.ai/api/v1` | OpenAI, which pi-ai already ships a descriptor for |
+| `openai` | `api.openai.com/v1` | OpenAI |
+| `anthropic` | `api.anthropic.com` | Anthropic |
+
+That the file is short is the finding, not an omission. A vendor whose model is
+a value needs nothing built for it.
 
 ## At the prompt
 
 ```
-/model <name>              switch model, keeping the provider
-/model <provider> <name>   switch both — this may move the route, and the bridge with it
-/harness pi|claude-code    continue with a different loop
-/detail answer|normal|debug
+/options   whose tools, which model — and what each one costs
+/detail minimal|standard|detailed
 ```
 
-Switching model works on both, and neither is a special case: Pi's model is a
-descriptor we build, and Claude Code supports it the way its own `/model` does.
-Both pay a cold prompt cache, and on Claude Code any thinking blocks from the
-previous model are dropped by the new one — silently, and unbilled.
+One command, and the same gesture `coding-agent` uses: `/options` prints what
+can change, a number opens one, a number picks a value.
 
-`/harness` is the one worth watching, because the two answers differ and the
-command says which you are about to get. Switch to **Pi** and it arrives knowing
-the conversation: its transcript is assigned from the committed log. Switch to
-**Claude Code** and it does not, because its context lives in the agent and a
-new one has none of this — `recovery: "none"`, at the moment it costs something.
+```
+What this recipe lets you change:
+   1. tools    theirs
+   2. provider openrouter
+   3. model    anthropic/claude-sonnet-5
+   4. effort   default
+Reply with a number to change one.
+› 1
+tools:
+   1. ours
+   2. theirs  ·  current
+› 1
+Ours: bash, read_file and write_file against the sandbox, validated here and
+gated by `decide`.
+```
 
-That is worth doing once rather than reading about. Asked a question about the
-turn before, a freshly started Claude Code did not say it had no idea; it
-answered with a number from somewhere else entirely. The warning names the
-consequence because the agent will not.
+The gesture is shared with `coding-agent`; the reason is not. There the axes
+belong to the agent, which publishes them over the protocol, and naming them in
+the recipe would be guessing at another product's vocabulary. Here they belong
+to the recipe — a vendor library exposes a constructor rather than a menu — so
+the table is ours, and it is `keyof Choice` so it cannot go stale silently.
+
+`--sandbox` is the one axis argv sets and `/options` does not, because it has to
+be answered before the sandbox is opened.
 
 ## Running the live tests
 
-Two gates, because `bun run check` is hermetic and a connected machine must not
+Gated, because `bun run check` is hermetic and a connected machine must not
 spend money for running it:
 
 ```bash
-AGLIB_LIVE_MODEL=1 bun test recipes/vendored-agents
+AGLIB_LIVE_MODEL=1 bun test recipes/vendored-agent
 ```
+
+They run Pi on the route Pi actually takes — straight to OpenRouter on the
+OpenAI wire, which is the route the recipe gives it.

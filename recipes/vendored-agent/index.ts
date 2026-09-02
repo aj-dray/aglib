@@ -1,79 +1,62 @@
 /**
  * Somebody else's agent, deeply integrated.
  *
- * Two vendor libraries wrapped as a `Harness`, running inside our log, our
- * sandbox and — through `serveAnthropicWire` — our model port. The claim this
- * recipe makes is that "use their agent" and "own the session" are not a
- * trade: pick a harness, and what changes is which control points you keep.
+ * Pi's coding agent wrapped as a `Harness`, running inside our log, our sandbox
+ * and our tool executor. The claim is that "use their agent" and "own the
+ * session" are not a trade — but it holds only when the vendor's library
+ * exposes the seams that make it true, which is what this recipe measures:
  *
- * | harness | their tools | ours | prompt | resume |
- * | --- | --- | --- | --- | --- |
- * | `claude-code` | by name, inside its process | an in-process MCP server | its preset with ours appended | none |
- * | `pi` | as values, re-pointed at our sandbox | the same executor | ours | from the log |
+ *   - **`state.tools` is ours to fill**, and Pi's own tools are *values*, each
+ *     taking an `operations` seam. `--tools theirs` keeps their schema,
+ *     truncation and prompt guidance while the shell they run is ours and
+ *     `decide` gates the call; `--tools ours` puts three of our own in that
+ *     list instead, on the same sandbox through the same executor.
+ *   - **`state.messages` is ours to seed**, from the committed log on every
+ *     activation. That is `recovery: "history"`, and it is what lets an
+ *     interrupted run be picked up and finished.
+ *   - **Its model is a descriptor**, not a client, so pointing the loop at a
+ *     provider is three fields and no translation.
  *
- * `coding-agents` is the other end of the same argument: any agent in the
- * registry, cheaply, keeping none of that.
+ * `coding-agent` is the other end of the argument: any agent in the ACP
+ * registry, cheaply, keeping none of that. The README says what the tier
+ * between the two gets you, and why it is documented rather than carried.
  */
 import { runAgent, type Agent, type RunResult } from "aglib";
 import { renderRun, type Sink } from "aglib/render";
 import { terminalSink, turnsFrom } from "aglib/terminal";
-import { runCommand } from "./commands.ts";
+import { runCommand, patched, type Choosing } from "./commands.ts";
 import { createSqliteStore } from "aglib/store/adapters/sqlite";
-import { createOpenAiCompatibleModel, createOpenRouterModel } from "aglib/model/adapters/openai-compatible";
-import { createAnthropicModel } from "aglib/model/adapters/anthropic";
 import { createLocalSandboxProvider } from "aglib/sandbox/adapters/local";
 import { createDockerSandboxProvider } from "aglib/sandbox/adapters/docker";
-import type { Model } from "aglib/model";
 import type { Sandbox } from "aglib/sandbox";
 import { Database } from "bun:sqlite";
 import { recipeMarker } from "../manifest.ts";
-import { anthropicRoute, piRoute } from "./route.ts";
-import { createClaudeCodeHarness } from "./claude-code.ts";
+import { routeTo, type Provider } from "./route.ts";
 import { createPiHarness } from "./pi.ts";
 import { sandboxTools } from "./tools.ts";
 import { piCodingTools } from "./pi-tools.ts";
 
-export const harnessIds = ["claude-code", "pi"] as const;
-export type HarnessId = (typeof harnessIds)[number];
-
 export interface Choice {
-  harness: HarnessId;
-  tools: "ours" | "theirs" | "both";
+  /** Whose tools the agent gets. The finding this recipe exists for. */
+  tools: "ours" | "theirs";
   sandbox: "local" | "docker";
-  /** Answer once and exit, for someone at a terminal who wants the script behaviour. */
-  once?: boolean;
-  /** Route through the local Anthropic bridge even where the provider serves that wire itself. */
-  bridge?: boolean;
-  provider: "openrouter" | "openai" | "anthropic";
+  provider: Provider;
   model: string;
   effort?: "low" | "medium" | "high";
 }
 
 const say = (sink: Sink, text: string) => (sink.status ?? sink.write)(`${text}\n`);
 
+/** The whole selection, in the order `/options` lists it. */
+const selection = (choice: Choice): string =>
+  `tools ${choice.tools} · ${choice.provider} · ${choice.model}`;
+
 export const defaultChoice: Choice = {
-  harness: "claude-code",
-  tools: "ours",
+  tools: "theirs",
   sandbox: "local",
   provider: "openrouter",
   model: "anthropic/claude-sonnet-5",
 };
-
-const keyFor = {
-  openrouter: "OPENROUTER_API_KEY",
-  openai: "OPENAI_API_KEY",
-  anthropic: "ANTHROPIC_API_KEY",
-} as const;
-
-export function createChosenModel(choice: Choice): Model {
-  const apiKey = process.env[keyFor[choice.provider]];
-  if (!apiKey) throw new Error(`${keyFor[choice.provider]} is not set (needed for --provider ${choice.provider})`);
-  if (choice.provider === "anthropic") return createAnthropicModel({ apiKey, model: choice.model });
-  if (choice.provider === "openai") {
-    return createOpenAiCompatibleModel({ apiKey, baseUrl: "https://api.openai.com/v1", model: choice.model });
-  }
-  return createOpenRouterModel({ apiKey, model: choice.model, appName: "aglib-vendored-agents" });
-}
 
 async function openSandbox(kind: Choice["sandbox"]): Promise<Sandbox> {
   const provider = kind === "docker"
@@ -87,125 +70,79 @@ async function openSandbox(kind: Choice["sandbox"]): Promise<Sandbox> {
   return sandbox.value;
 }
 
-
-/**
- * Where this harness's requests go, for the selection it has now.
- *
- * Rebuilt on a switch rather than made once: changing provider moves the
- * endpoint, and may start or stop the bridge, so the route is as much a
- * property of the selection as the model is.
- */
-const routeFor = (choice: Choice, options: { model?: Model }) =>
-  (choice.harness === "pi" ? piRoute : anthropicRoute)({
-    provider: choice.provider,
-    model: () => options.model ?? createChosenModel(choice),
-    ...(choice.bridge ? { force: true } : {}),
-  });
+const instructions = "You are a careful assistant working inside a sandbox. Be brief and say what you did.";
 
 export async function main(
   task: string,
-  options: { choice?: Choice; model?: Model; sink?: Sink; turns?: AsyncIterable<string> } = {},
+  options: { choice?: Choice; sink?: Sink; turns?: AsyncIterable<string> } = {},
 ): Promise<string> {
   const choice = options.choice ?? defaultChoice;
   const sink: Sink = options.sink ?? terminalSink();
   const sandbox = await openSandbox(choice.sandbox);
 
-  // Straight to the provider where one serves the wire, and through the bridge
-  // only where none does. Both agents are told a base URL and a token either
-  // way, and neither learns which of the three it got.
-  let route = routeFor(choice, options);
+  // Three fields, and the vendor's loop is pointed at a provider. Nothing
+  // translates anything, and there is no socket to close.
+  let route = routeTo(choice.provider);
 
-  // Worth saying out loud: routing through the bridge costs prompt caching and
-  // real token counts, and a reader should know which one they got.
-  (sink.status ?? sink.write)(`· via ${route.via}\n`);
+  // The list `/options` printed last, waiting for the next line to answer it.
+  let choosing: Choosing | null = null;
 
-  const instructions = "You are a careful assistant working inside a sandbox. Be brief and say what you did.";
-
-  // Held for the life of this process, and no longer than that. An agent that
-  // keeps its own context is continued by being handed the name it knows the
-  // conversation by; where that name should live if the process restarts is a
-  // question this recipe does not answer, because its store is in memory.
-  let vendorSessionId: string | undefined;
-
-  const agentFor = (): Agent => choice.harness === "pi"
-    ? {
-        id: "vendored-agents", version: "1", instructions,
-        // Pi needs nothing here: `transcriptFor` assigns `state.messages` from
-        // the committed log every activation, which is why it is the one vendor
-        // harness that can declare `recovery: "history"`.
-        harness: createPiHarness({
-          baseUrl: route.baseUrl, token: route.token, api: route.api,
-          ...(choice.effort ? { effort: choice.effort } : {}),
-        }),
-        // Every tool goes through the executor, theirs included: `pi-tools.ts`
-        // adapts Pi's own bash, read, edit and write and backs them with the
-        // sandbox, so they are validated and gated like anything we wrote.
-        tools: [
-          ...(choice.tools === "ours" ? [] : piCodingTools(sandbox)),
-          ...(choice.tools === "theirs" ? [] : sandboxTools(sandbox)),
-        ],
-      }
-    : {
-        id: "vendored-agents", version: "1", instructions,
-        harness: createClaudeCodeHarness({
-          sandbox,
-          tools: choice.tools,
-          // Its context lives over there, so continuing a conversation means
-          // handing back the name it knows the conversation by.
-          ...(vendorSessionId ? { resume: vendorSessionId } : {}),
-          onSession: (id) => { vendorSessionId = id; },
-          ...(choice.effort ? { effort: choice.effort } : {}),
-          env: {
-            ...process.env as Record<string, string>,
-            ANTHROPIC_BASE_URL: route.baseUrl,
-            ANTHROPIC_AUTH_TOKEN: route.token,
-            // OpenRouter's guide is explicit that this must be empty, or the
-            // SDK prefers it and talks to Anthropic with somebody else's key.
-            ANTHROPIC_API_KEY: route.via === "openrouter" ? "" : route.token,
-            ANTHROPIC_MODEL: "claude-sonnet-5",
-            ANTHROPIC_SMALL_FAST_MODEL: "claude-sonnet-5",
-          },
-        }),
-        // Its tools are its own, reached through an in-process MCP server. The
-        // executor stays empty on purpose: two routes to a tool would be two
-        // places to authorize one.
-      };
+  /**
+   * Nothing is held between turns, and that is the point.
+   *
+   * `transcriptFor` assigns `state.messages` from the committed log on every
+   * activation, so what the agent knows is what the log says and nothing else.
+   * A harness that kept its own context would need a vendor session id threaded
+   * through every turn and a decision about where it lives across a restart;
+   * this one needs neither, because the answer is already in the store.
+   */
+  const agentFor = (): Agent => ({
+    id: "vendored-agent", version: "1", instructions,
+    harness: createPiHarness({
+      baseUrl: route.baseUrl, token: route.token, api: route.api, model: choice.model,
+      ...(choice.effort ? { effort: choice.effort } : {}),
+    }),
+    // Every tool goes through the executor, theirs included: `pi-tools.ts`
+    // adapts Pi's own bash, read, edit and write and backs them with the
+    // sandbox, so they are validated and gated like anything we wrote.
+    //
+    // One list or the other, and not a union of the two: `state.tools` is one
+    // flat list, our `bash` and Pi's `bash` are the same name, and
+    // `createExecutor` refuses a duplicate. A tool this application actually
+    // owns — a memory, a delegation — goes in this list beside Pi's and is
+    // gated identically; that is the seam, and both branches below use it.
+    tools: choice.tools === "ours" ? sandboxTools(sandbox) : piCodingTools(sandbox),
+  });
 
   const database = new Database(":memory:");
   const store = createSqliteStore({ database });
   const sessionId = crypto.randomUUID();
   let result: RunResult | undefined;
   for await (const input of options.turns ?? [task]) {
-    const command = runCommand({ line: input, choice, sink });
+    // A line beginning with `/` is for the terminal, not the agent — and so is
+    // a bare number answering a list one of them printed. Neither reaches the log.
+    const command = runCommand({ line: input, choice, sink, choosing });
     if (command.handled) {
-      // Resolved before anything is committed to, and the old route closed only
-      // once the new one exists — a bridge left running is a listener nobody
-      // will stop.
-      if (command.model || command.harness) {
-        const proposed: Choice = { ...choice, ...(command.model ?? {}), ...(command.harness ? { harness: command.harness } : {}) };
+      if (command.choosing !== undefined) choosing = command.choosing;
+      // Resolved before anything is committed to: a provider with no credential
+      // leaves the selection where it was rather than failing on the next turn.
+      if (command.set) {
+        const proposed = patched(choice, command.set.axis, command.set.value);
         try {
-          const next = routeFor(proposed, options);
-          await route.close();
-          route = next;
+          if (command.set.axis === "provider") route = routeTo(proposed.provider);
           Object.assign(choice, proposed);
-          // A different vendor is a different conversation to that vendor, so
-          // what it was told about the last one goes with it.
-          vendorSessionId = undefined;
-          say(sink, `Answering with ${choice.harness} · ${choice.provider} · ${choice.model} · via ${route.via}, from the next turn.`);
+          say(sink, `Answering with ${selection(choice)}, from the next turn.`);
         } catch (error) {
-          say(sink, `Still ${choice.harness} · ${choice.provider} · ${choice.model}: ${error instanceof Error ? error.message : String(error)}`);
+          say(sink, `Still ${selection(choice)}: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
       continue;
     }
+    choosing = null;
 
-    // Rebuilt each turn, because `resume` is only known after the first one has
-    // told us what the agent calls this conversation.
     result = await renderRun(runAgent({ agent: agentFor(), store, sessionId, key: "me", input }), sink);
-
   }
 
-  await route.close();
   await sandbox.close();
   await store.close();
   if (result && result.status !== "completed") {
@@ -214,37 +151,34 @@ export async function main(
   return sessionId;
 }
 
-/** `--harness pi --tools both --sandbox docker` — everything else is the task. */
+/**
+ * `--tools ours --sandbox docker --provider openai --model gpt-5` — the rest is
+ * the task.
+ *
+ * A flag per axis, and deliberately not `coding-agent`'s `--set id=value`.
+ * There the ids belong to whichever agent is on the other end of the pipe and
+ * naming them would be a guess; here they are this file's own fields, typed,
+ * and `--sandbox` has to be answered before the sandbox is opened — which is
+ * why it is the one axis argv can set and `/options` cannot.
+ */
 export function parseArguments(argv: readonly string[]): { choice: Choice; task: string } {
-  // Flags taking no value must be named, or `--once "do the thing"` swallows
-  // the task as `once`'s argument and the agent is asked nothing.
-  const valueless = new Set(["once", "bridge"]);
   const flags = new Map<string, string>();
   const words: string[] = [];
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]!;
     if (!argument.startsWith("--")) { words.push(argument); continue; }
-    const name = argument.slice(2);
-    if (valueless.has(name)) { flags.set(name, "true"); continue; }
-    flags.set(name, argv[index + 1] ?? "");
+    flags.set(argument.slice(2), argv[index + 1] ?? "");
     index += 1;
-  }
-  const harness = (flags.get("harness") ?? defaultChoice.harness) as HarnessId;
-  if (!harnessIds.includes(harness)) {
-    throw new Error(`Unknown harness '${harness}'. One of: ${harnessIds.join(", ")}`);
   }
   const effort = flags.get("effort") as Choice["effort"];
   return {
     choice: {
       ...defaultChoice,
-      harness,
       tools: (flags.get("tools") ?? defaultChoice.tools) as Choice["tools"],
       sandbox: (flags.get("sandbox") ?? defaultChoice.sandbox) as Choice["sandbox"],
-      provider: (flags.get("provider") ?? defaultChoice.provider) as Choice["provider"],
+      provider: (flags.get("provider") ?? defaultChoice.provider) as Provider,
       model: flags.get("model") || defaultChoice.model,
       ...(effort ? { effort } : {}),
-      ...(flags.has("once") ? { once: true } : {}),
-      ...(flags.has("bridge") ? { bridge: true } : {}),
     },
     task: words.join(" "),
   };
@@ -252,9 +186,9 @@ export function parseArguments(argv: readonly string[]): { choice: Choice; task:
 
 if (import.meta.main) {
   const { choice, task } = parseArguments(process.argv.slice(2));
-  console.error(`· ${choice.harness} · tools ${choice.tools} · sandbox ${choice.sandbox} · ${choice.provider} · ${choice.model}`);
+  console.error(`· pi · ${selection(choice)} · sandbox ${choice.sandbox}`);
   // The same terminal every recipe here gets: a prompt for a person, one shot
   // for a pipe, and the argv task as the first turn either way.
-  await main(task, { choice, turns: turnsFrom({ task, once: choice.once === true }).lines });
-  console.log(recipeMarker("vendored-agents"));
+  await main(task, { choice, turns: turnsFrom({ task }).lines });
+  console.log(recipeMarker("vendored-agent"));
 }

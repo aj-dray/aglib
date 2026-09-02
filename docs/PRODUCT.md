@@ -82,16 +82,16 @@ A fair question, and it has a precise answer rather than a hopeful one. Four thi
 
 A fifth does not hold everywhere, and that is what `recovery` exists to say: **whether our log is
 enough to put the agent back.** It is, exactly where a vendor exposes its transcript as something
-we can assign. Pi does, so `recipes/vendored-agents` stages a killed worker's session — everything
+we can assign. Pi does, so `recipes/vendored-agent` stages a killed worker's session — everything
 through a committed tool result, no terminal entry — and Pi finishes it from the log without
-re-running the effect. The Claude Agent SDK and the Agent Client Protocol do not: both accept a
-*user* turn or an instruction to load their own session, and neither accepts a conversation we
-assembled. That is their surface, not our design, and the log is not the thing missing — a
-`ContentPart` of kind `opaque` exists precisely so a provider's own blocks survive verbatim.
+re-running the effect. The Agent Client Protocol does not: it accepts a *user* turn or an
+instruction to load its own session, and not a conversation we assembled. That is its surface, not
+our design, and the log is not the thing missing — a `ContentPart` of kind `opaque` exists precisely
+so a provider's own blocks survive verbatim.
 
 So the requirement "our log can reconstruct the inner agent" is a real and desirable property, and
-it is a per-harness one. Making it a promise of the package would mean claiming a capability half
-the harnesses cannot keep, which is the simulated guarantee this document forbids two sections down.
+it is a per-harness one. Making it a promise of the package would mean claiming a capability
+some harnesses cannot keep, which is the simulated guarantee this document forbids two sections down.
 It follows that the useful way to choose a harness is by **who should own the conversation**, and
 `recovery` is where each one answers.
 

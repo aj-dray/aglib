@@ -147,11 +147,10 @@ function createRenderer(sink: Sink): Renderer {
   /**
    * What has been streamed since the last assistant entry.
    *
-   * The harnesses disagree about deltas — our loop and Pi stream tokens, the
-   * Claude Code SDK emits one delta per whole message, and a harness may emit
-   * none at all. The entry stream is the one channel every harness fills, so
-   * the entry decides what is shown and the deltas decide how much of it
-   * already has been.
+   * The harnesses disagree about deltas — some stream tokens, some emit one
+   * delta per whole message, and some emit none at all. The entry stream is
+   * the one channel every harness fills, so the entry decides what is shown
+   * and the deltas decide how much of it already has been.
    *
    * The rule the port does not state, and this therefore does not assume:
    * deltas preceding an assistant entry *ought* to concatenate to its text.
