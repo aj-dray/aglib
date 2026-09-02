@@ -6,7 +6,7 @@ You bring the product — users, tenancy, channels, UI, deployment, policy. agli
 session log you can resume, a loop that runs against it, tools under your own permission rule,
 somewhere contained to run them, and four seams with adapters: model, store, sandbox, harness.
 
-> **Pre-release.** The API changes without deprecation aliases, so pin an exact version: `bun add aglib@<version>`. Both recipes run.
+> **Pre-release.** The API changes without deprecation aliases, so pin an exact version: `bun add aglib@npm:@a-dray/aglib@<version>`. Both recipes run. The unscoped name is a lookalike of an existing package; the alias keeps imports as `aglib`.
 
 ## The shape
 

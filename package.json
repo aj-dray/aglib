@@ -1,5 +1,5 @@
 {
-  "name": "aglib",
+  "name": "@a-dray/aglib",
   "version": "0.1.0",
   "type": "module",
   "description": "A small TypeScript toolkit for building your own agent harness.",
