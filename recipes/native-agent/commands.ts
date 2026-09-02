@@ -26,7 +26,7 @@ const help = [
   "/model                     what is answering now",
   "/model <name>              switch model, keeping the provider",
   "/model <provider> <name>   switch both",
-  "/detail answer|normal|debug   how much of a run to show",
+  "/detail minimal|standard|detailed   how much of a run to show",
   "/help                      this",
 ].join("\n");
 
@@ -43,8 +43,8 @@ export function runCommand(input: {
 
   if (name === "detail") {
     const level = rest[0];
-    if (level !== "answer" && level !== "normal" && level !== "debug") {
-      say(`Detail is ${input.sink.detail ?? "normal"}. One of: answer, normal, debug.`);
+    if (level !== "minimal" && level !== "standard" && level !== "detailed") {
+      say(`Detail is ${input.sink.detail ?? "standard"}. One of: minimal, standard, detailed.`);
       return { handled: true };
     }
     // Mutated rather than rebuilt: the sink is the same screen throughout, and
