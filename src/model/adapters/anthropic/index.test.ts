@@ -75,13 +75,43 @@ test("only the leading run of system messages becomes the system prompt", async 
   expect(messages.map((message) => message.role)).toEqual(["user", "system"]);
 });
 
-test("the cache breakpoint lands on the last block of the prefix, and only there", async () => {
+/**
+ * Two breakpoints in the prefix, at its head and at its end.
+ *
+ * The last is what makes a conversation's own prefix reusable across its turns.
+ * The first is what makes an agent's standing instructions reusable across
+ * conversations: everything after the first block is composed per conversation,
+ * so with one mark at the end a second conversation shares nothing at all and
+ * rewrites the instructions it has in common with every other.
+ */
+test("the prefix is marked at its head and at its end, and nowhere between", async () => {
   const { model, sent } = capturing();
   await collect(model.generate({ messages: conversation, cacheAfter: 2 }));
 
   const system = sent[0]!["system"] as Record<string, unknown>[];
-  expect(system[0]).not.toHaveProperty("cache_control");
-  expect(system[1]!["cache_control"]).toEqual({ type: "ephemeral" });
+  expect(system[0]!["cache_control"]).toEqual({ type: "ephemeral" });
+  expect(system[system.length - 1]!["cache_control"]).toEqual({ type: "ephemeral" });
+  // Anything between buys nothing and spends a budget of four.
+  for (const block of system.slice(1, -1)) expect(block).not.toHaveProperty("cache_control");
+  // And two is well inside that budget, with the conversation's own mark still
+  // to place.
+  expect(system.filter((block) => block["cache_control"]).length).toBeLessThanOrEqual(2);
+});
+
+/** One block is one mark: the head and the end are the same block. */
+test("a single system block carries one breakpoint, not two", async () => {
+  const { model, sent } = capturing();
+  await collect(model.generate({
+    messages: [
+      { role: "system", content: "You are a bookkeeper." },
+      { role: "user", content: "What is the balance?" },
+    ],
+    cacheAfter: 1,
+  }));
+
+  const system = sent[0]!["system"] as Record<string, unknown>[];
+  expect(system).toHaveLength(1);
+  expect(system.filter((block) => block["cache_control"]).length).toBe(1);
 });
 
 test("the model this adapter was built with is the model it asks for", async () => {
