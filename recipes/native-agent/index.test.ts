@@ -64,6 +64,45 @@ test("a write over budget changes nothing and hands back what is there", async (
   });
 });
 
+test("a message sent mid-turn reaches the operator, and is not the answer", async () => {
+  await withHome(async () => {
+    const answer: string[] = [];
+    const account: string[] = [];
+    await main("check the disk and keep me posted", {
+      resolveModel: () => createFakeModel([
+        call("send", { to: "operator", content: "Checking now — this will take a moment." }),
+        { text: "68% used." },
+      ]),
+      sink: { write: (text) => answer.push(text), status: (line) => account.push(line) },
+    });
+
+    // An activation has one answer; `send` is the escape from a long task being
+    // silence until it arrives.
+    expect(account.join("")).toContain("Checking now");
+    // And it is not that answer. Redirecting `write` still captures the answer
+    // and nothing else, which is the promise the channel would have broken.
+    expect(answer.join("")).toBe("68% used.\n");
+  });
+});
+
+test("a send to an address nothing serves is a tool error, not a dead turn", async () => {
+  await withHome(async () => {
+    const account: string[] = [];
+    await main("tell the other session to check the logs", {
+      resolveModel: () => createFakeModel([
+        call("send", { to: "8f14e45f-0000-4000-8000-000000000000", content: "Check the logs too." }),
+        { text: "Passed it on." },
+      ]),
+      sink: { write: () => {}, status: (line) => account.push(line) },
+    });
+
+    // The store refuses a delivery to a session that does not exist, and that
+    // refusal would reject the commit and take the activation with it. The
+    // agent gets a result it can act on instead, and keeps its turn.
+    expect(account.join("")).toContain("No channel or session");
+  });
+});
+
 test("a spawned subagent runs from the queue, and its report reaches the parent", async () => {
   await withHome(async (home) => {
     const said: string[] = [];

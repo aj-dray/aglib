@@ -70,7 +70,10 @@ export async function reportToParent(input: {
   sessionId: string;
   output: string;
 }): Promise<readonly Delivery[]> {
-  const read = await input.store.read({ sessionId: input.sessionId });
+  // Only the metadata is wanted, so only the metadata is asked for: `afterSeq`
+  // past the end returns the session row and none of its entries, where the
+  // default parses the whole log to find one field.
+  const read = await input.store.read({ sessionId: input.sessionId, afterSeq: Number.MAX_SAFE_INTEGER });
   if (!read.ok) return [];
   const parent = (read.value.metadata as ChildRecord | null)?.parentSessionId;
   if (!parent) return [];
