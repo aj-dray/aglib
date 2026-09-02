@@ -20,10 +20,8 @@ export interface Choice {
   model: string;
   sandbox: SandboxKind;
   effort?: ModelRequest["effort"];
-  /** How much of the run to show. `debug` is for working out why it did that. */
+  /** How much of the run to show. `detailed` is for working out why it did that. */
   detail?: Sink["detail"];
-  /** Answer once and exit, for someone who has a terminal and wants the script behaviour. */
-  once?: boolean;
 }
 
 const defaultModel: Record<Provider, string> = {
@@ -47,22 +45,17 @@ export function createChosenModel(choice: Choice): Model {
   if (choice.provider === "openai") {
     return createOpenAiCompatibleModel({ apiKey, baseUrl: "https://api.openai.com/v1", model });
   }
-  return createOpenRouterModel({ apiKey, model, appName: "aglib-native-agents" });
+  return createOpenRouterModel({ apiKey, model, appName: "aglib-native-agent" });
 }
 
-/** `--provider x --model y --effort high --sandbox docker --detail debug` — the rest is the task. */
+/** `--provider x --model y --effort high --sandbox docker --detail detailed` — the rest is the task. */
 export function parseArguments(argv: readonly string[]): { choice: Choice; task: string } {
-  // Flags that take no value have to be named, or `--once "do the thing"`
-  // swallows the task as `once`'s argument and the agent is asked nothing.
-  const valueless = new Set(["once"]);
   const flags = new Map<string, string>();
   const words: string[] = [];
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]!;
     if (!argument.startsWith("--")) { words.push(argument); continue; }
-    const name = argument.slice(2);
-    if (valueless.has(name)) { flags.set(name, "true"); continue; }
-    flags.set(name, argv[index + 1] ?? "");
+    flags.set(argument.slice(2), argv[index + 1] ?? "");
     index += 1;
   }
 
@@ -80,15 +73,17 @@ export function parseArguments(argv: readonly string[]): { choice: Choice; task:
   }
 
   const detail = flags.get("detail") as Sink["detail"] | undefined;
-  if (detail && !["answer", "normal", "debug"].includes(detail)) {
-    throw new Error(`Unknown detail '${detail}'. One of: answer, normal, debug`);
+  if (detail && !["minimal", "standard", "detailed"].includes(detail)) {
+    throw new Error(`Unknown detail '${detail}'. One of: minimal, standard, detailed`);
   }
 
   return {
     choice: {
       provider, model: flags.get("model") || defaultModel[provider], sandbox,
-      ...(effort ? { effort } : {}), ...(detail ? { detail } : {}),
-      ...(flags.has("once") ? { once: true } : {}),
+      // A conversation shows the conversation. The internal stream is a
+      // question someone asks for with `--detail standard`, not the default view
+      // of a personal agent talking to its operator.
+      ...(effort ? { effort } : {}), detail: detail ?? "minimal",
     },
     task: words.join(" "),
   };

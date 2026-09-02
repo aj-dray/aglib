@@ -133,9 +133,8 @@ test("a channel maps a thread onto one session, and the worker answers it", asyn
 });
 
 test("a flag that takes no value does not swallow the task", () => {
-  const { choice, task } = parseArguments(["--once", "count the files", "--detail", "debug"]);
-  expect(choice.once).toBe(true);
-  expect(choice.detail).toBe("debug");
+  const { choice, task } = parseArguments(["count the files", "--detail", "detailed"]);
+  expect(choice.detail).toBe("detailed");
   expect(task).toBe("count the files");
 });
 

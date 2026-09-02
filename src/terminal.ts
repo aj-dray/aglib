@@ -21,12 +21,13 @@
  *   - A person at a terminal gets a prompt, and any task on argv is simply
  *     their first turn.
  *   - A pipe or a redirect gets one shot and an exit code, so
- *     `recipe native-agents "…" > answer.txt` and `echo … | recipe` both behave
+ *     `recipe native-agent "…" > answer.txt` and `echo … | recipe` both behave
  *     the way every other command-line program does.
  *
- * `once` overrides the first case for someone who has a terminal and wants the
- * script behaviour anyway. There is no flag for the reverse, because prompting
- * into a pipe would wait for a person who is not there.
+ * There is no flag either way. `--once` existed to give a person at a terminal
+ * the script behaviour, and `echo "…" | recipe` already does that — a second
+ * way to say a thing the shell says better. Prompting into a pipe has no flag
+ * for the opposite reason: it would wait for a person who is not there.
  */
 import { createInterface } from "node:readline";
 import type { Sink } from "./render.js";
@@ -40,13 +41,12 @@ export interface TurnSource {
 export function turnsFrom(input: {
   /** The task on argv, if there was one. */
   task: string;
-  once: boolean;
   /** Injected so a test never touches a terminal. */
   stdin?: NodeJS.ReadStream;
   isTTY?: boolean;
 }): TurnSource {
   const stdin = input.stdin ?? process.stdin;
-  const interactive = (input.isTTY ?? stdin.isTTY === true) && !input.once;
+  const interactive = input.isTTY ?? stdin.isTTY === true;
 
   if (!interactive) {
     return {

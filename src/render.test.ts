@@ -101,6 +101,38 @@ test("input that came from somewhere else is shown; input the caller passed is n
   expect(status.join("")).toContain("◦ from session 9b41f0e2 · Subagent reports: 1250");
 });
 
+test("messages shows the conversation and withholds the internal stream", async () => {
+  const { sink, answer, status } = harness("minimal");
+  await renderRun(runOf([
+    at({ type: "run.started", runId: "r", input: "Subagent reports: 1250", from: { kind: "session", id: "9b41f0e2-aaaa" } }),
+    at({ type: "assistant", runId: "r", content: "", calls: [{ callId: "c1", name: "bash", arguments: "{}" }] }),
+    at({ type: "tool.started", runId: "r", callId: "c1" }),
+    at({ type: "tool.finished", runId: "r", callId: "c1", result: { content: "1250" } }),
+    at({ type: "assistant", runId: "r", content: "September closes at 1250." }),
+  ]), sink);
+
+  // A message arriving is the conversation happening, so it survives the level
+  // that drops the account of the run.
+  expect(status.join("")).toContain("◦ from session 9b41f0e2");
+  expect(answer.join("")).toBe("September closes at 1250.\n");
+  // The agent talking to its own tools is not.
+  expect(status.join("")).not.toContain("bash");
+  expect(status.join("")).not.toContain("✓");
+});
+
+test("a failed call is never behind a detail level", async () => {
+  const { sink, status } = harness("minimal");
+  await renderRun(runOf([
+    at({ type: "assistant", runId: "r", content: "", calls: [{ callId: "c1", name: "bash", arguments: "{}" }] }),
+    at({ type: "tool.finished", runId: "r", callId: "c1", result: { content: "No suitable shell found", isError: true } }),
+  ]), sink);
+
+  // An agent that silently did nothing is the one outcome a reader cannot
+  // diagnose from what they were shown.
+  expect(status.join("")).toContain("✗");
+  expect(status.join("")).toContain("No suitable shell found");
+});
+
 test("a tool result says how long it took, and never volunteers its details", async () => {
   const { sink, status } = harness();
   await renderRun(runOf([
@@ -114,8 +146,8 @@ test("a tool result says how long it took, and never volunteers its details", as
   expect(status.join("")).not.toContain("sk-secret");
 });
 
-test("debug shows what normal withholds, because someone asked", async () => {
-  const { sink, status } = harness("debug");
+test("detailed shows what normal withholds, because someone asked", async () => {
+  const { sink, status } = harness("detailed");
   await renderRun(runOf([
     { type: "reasoning.delta", text: "weighing two options" },
     { type: "tool-call.delta", callId: "c1abcdef99", arguments: '{"comm' },
@@ -129,8 +161,12 @@ test("debug shows what normal withholds, because someone asked", async () => {
   expect(text).toContain('"exitCode":0');
 });
 
-test("answer writes the message and nothing at all beside it", async () => {
-  const { sink, answer, status } = harness("answer");
+test("a sink with no status channel writes the message and nothing beside it", async () => {
+  // The shape a medium with no second channel has, and the reason there is no
+  // `detail` level meaning the same thing.
+  const answer: string[] = [];
+  const status: string[] = [];
+  const sink: Sink = { write: (text) => answer.push(text) };
   await renderRun(runOf([
     at({ type: "assistant", runId: "r", content: "", calls: [{ callId: "c1", name: "bash", arguments: "{}" }] }),
     { type: "text.delta", text: "1250 GBP" },

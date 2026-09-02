@@ -29,9 +29,9 @@ terminal, which is the same rule every other command-line program follows:
 - **A pipe or a redirect** gets one shot and an exit code, so this composes with
   everything else on the command line.
 
-`--once` overrides the first case for someone who has a terminal and wants the
-script behaviour anyway. There is no flag for the reverse, because prompting
-into a pipe would wait for a person who is not there.
+There is no flag either way: `echo "…" | bun run recipe native-agent` is how you
+get the script behaviour at a terminal, and prompting into a pipe would wait
+for a person who is not there.
 
 ## At the prompt
 
@@ -42,7 +42,7 @@ the log.
 /model                        what is answering now
 /model <name>                 switch model, keeping the provider
 /model <provider> <name>      switch both
-/detail answer|normal|debug   how much of a run to show
+/detail minimal|standard|detailed   how much of a run to show
 /help
 ```
 
@@ -52,11 +52,11 @@ the next turn, and the subagent too. The prompt cache is scoped to the model
 that filled it, so the turn after a switch pays full price for the instructions
 and context again. `/model` says so rather than leaving it to an invoice.
 
-`--detail answer | normal | debug` decides how much of the run you see. The
-answer always goes to stdout and everything else to stderr, so redirecting
-captures the answer alone. `debug` adds reasoning, arguments as they form, and
-the structured `details` a tool returned — including a cancelled run's partial
-text, which is most of what debugging one is.
+`--detail minimal | standard | detailed` decides how much of the run you see.
+The answer always goes to stdout and everything else to stderr, so redirecting
+captures the answer alone. `detailed` adds reasoning, arguments as they form,
+and the structured `details` a tool returned — including a cancelled run's
+partial text, which is most of what debugging one is.
 
 ## What it demonstrates
 

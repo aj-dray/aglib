@@ -30,11 +30,19 @@
  * was never given — which is why `finish` always states it, and takes it from
  * the result rather than from whatever happened to stream.
  *
- * **`detail` is the knob that makes one projection serve every medium.** Email
- * wants `"answer"`: the message, nothing else, because it has nowhere to put
- * anything else. A terminal wants `"normal"`. Someone working out why a run
- * did what it did wants `"debug"`, and the difference between those two is
- * verbosity rather than a different renderer.
+ * **`detail` is the knob that makes one projection serve every medium.** Three
+ * levels, because what the knob is graduated in is the *internal stream* and
+ * not the conversation: a tool call is the agent talking to itself, while a
+ * message arriving from a subagent, a peer or a person is the conversation
+ * happening. The log keeps those apart — one is an entry the loop wrote, the
+ * other came through `enqueue` — so the projection does too.
+ *
+ * There is no level below `"minimal"`, and there was one. A medium with no
+ * second channel says so by having no `status`, which drops the account
+ * entirely; a `detail` that meant the same thing was a second way to state a
+ * fact the `Sink` already stated. Failures are not behind a level either — an
+ * agent that silently did nothing is the one outcome a reader cannot diagnose
+ * from what they were shown.
  *
  * Two channels out, because they answer different questions. `write` carries
  * the answer, so redirecting it captures the answer and nothing else. `status`
@@ -63,13 +71,16 @@ export interface Sink {
   /**
    * How much of the run to show.
    *
-   * `"answer"` writes the assistant's text and nothing else — the shape a
-   * medium with no second channel needs. `"normal"` adds what the agent did:
-   * tool calls and their results, where a message came from, what the run
-   * spent. `"debug"` adds what it was thinking, arguments as they form, and
-   * the structured `details` a tool returned.
+   * `"minimal"` is the conversation: the answer, input that arrived from
+   * somewhere else, and anything that failed. `"standard"` adds the internal
+   * stream — tool calls, their results, and what the run spent. `"detailed"`
+   * adds what it was thinking, arguments as they form, and the structured
+   * `details` a tool returned.
+   *
+   * For the answer and nothing whatever beside it, give a sink with no
+   * `status`.
    */
-  detail?: "answer" | "normal" | "debug";
+  detail?: "minimal" | "standard" | "detailed";
   /**
    * Marks a run being watched rather than driven — a subagent taken off the
    * queue, most often. A labelled run has no answer channel: nobody asked it
@@ -130,8 +141,10 @@ function readable(content: Content): string {
 
 function createRenderer(sink: Sink): Renderer {
   const status = sink.status ?? (() => {});
-  const detail = sink.detail ?? "normal";
-  const debugging = detail === "debug";
+  const detail = sink.detail ?? "standard";
+  const debugging = detail === "detailed";
+  /** The agent talking to its own tools, as opposed to the conversation. */
+  const internal = debugging || detail === "standard";
   const now = sink.now ?? (() => Date.now());
   const label = sink.label ? `${sink.label} ` : "";
   const started = now();
@@ -149,8 +162,9 @@ function createRenderer(sink: Sink): Renderer {
    *
    * The harnesses disagree about deltas — some stream tokens, some emit one
    * delta per whole message, and some emit none at all. The entry stream is
-   * the one channel every harness fills, so the entry decides what is shown
-   * and the deltas decide how much of it already has been.
+   * the one channel every harness fills, so
+   * the entry decides what is shown and the deltas decide how much of it
+   * already has been.
    *
    * The rule the port does not state, and this therefore does not assume:
    * deltas preceding an assistant entry *ought* to concatenate to its text.
@@ -168,8 +182,6 @@ function createRenderer(sink: Sink): Renderer {
   let ticker: ReturnType<typeof setInterval> | undefined;
 
   const line = (text: string) => {
-    // `"answer"` has nowhere to put a status line, so it does not make one.
-    if (detail === "answer") return;
     if (open) { sink.write("\n"); open = false; }
     status(`${label}${text}\n`);
   };
@@ -236,14 +248,21 @@ function createRenderer(sink: Sink): Renderer {
         streamed = "";
       }
       for (const call of stored.calls ?? []) {
+        // The name is recorded whatever the level: a result rendered later
+        // reads it, and a reader who turns detail up mid-run should not meet a
+        // call id where every other line has a name.
         names.set(call.callId, call.name);
-        line(dim(`→ ${call.name} ${oneLine(call.arguments, 72)}`));
+        if (internal) line(dim(`→ ${call.name} ${oneLine(call.arguments, 72)}`));
       }
       return;
     }
     if (stored.type === "tool.started") {
       clocks.set(stored.callId, now());
       if (!sink.tty) return;
+      // At every level, unlike everything else about a call. A spinner is not
+      // an account of what the agent did — it leaves no trace, and it is the
+      // only thing between a reader and thirty seconds of silence.
+      //
       // The one piece of cursor control in this file, and the only reason a
       // long command is not silence. Unref'd so it can never hold a process open.
       const at = now();
@@ -259,7 +278,12 @@ function createRenderer(sink: Sink): Renderer {
       const name = names.get(stored.callId) ?? stored.callId.slice(0, 8);
       const took = at === undefined ? "" : ` · ${seconds(now() - at)}`;
       const body = oneLine(readable(stored.result.content), 64);
-      line(`${mark(stored.result.isError ? "✗" : "✓", stored.result.isError === true)} ${dim(`${name}${took}${body ? ` · ${body}` : ""}`)}`);
+      const failed = stored.result.isError === true;
+      // A success is the agent working; a failure is something the reader has
+      // to know about whatever they asked to be shown.
+      if (failed || internal) {
+        line(`${mark(failed ? "✗" : "✓", failed)} ${dim(`${name}${took}${body ? ` · ${body}` : ""}`)}`);
+      }
       // `details` is the structured channel for an application's own UI and
       // holds whatever that application put there — which may include a
       // credential. Asked for explicitly it is shown; it is never volunteered.
@@ -269,7 +293,7 @@ function createRenderer(sink: Sink): Renderer {
       return;
     }
     if (stored.type === "summary") {
-      line(dim(`· compacted through seq ${stored.replaces}`));
+      if (internal) line(dim(`· compacted through seq ${stored.replaces}`));
     }
     // `run.finished` is not rendered here. `finish` owns the last line, because
     // `RunResult` carries what the entry cannot: what the run spent, on every
@@ -281,14 +305,21 @@ function createRenderer(sink: Sink): Renderer {
       if (next.type === "text.delta") { say(next.text); return; }
       if (next.type === "reasoning.delta") {
         // Reasoning can outweigh the answer several times over, so it is behind
-        // `"debug"` rather than dimmed and always present.
+        // `"detailed"` rather than dimmed and always present.
         if (!debugging) return;
         if (!thinking) { line(dim("· thinking")); thinking = true; }
         stopTicker();
         status(dim(next.text));
         return;
       }
+      // A harness that reports progress reports it several times per call, in
+      // whatever shape its protocol happens to use — ACP forwards its whole
+      // `session/update`. That is a debugging channel, not a reading one: the
+      // call itself is announced by the entry that carries it, and the name is
+      // not even known yet on the first of these. So it sits behind `"detailed"`
+      // beside `tool-call.delta`, for the same reason.
       if (next.type === "tool.progress") {
+        if (!debugging) return;
         const name = names.get(next.callId) ?? next.callId.slice(0, 8);
         line(dim(`⋯ ${name} ${oneLine(JSON.stringify(next.data), 64)}`));
         return;
@@ -326,7 +357,9 @@ function createRenderer(sink: Sink): Renderer {
         line(`${mark("✗", true)} ${dim(`failed (${result.error.code}): ${oneLine(result.error.message, 80)} · ${parts}`)}`);
         return;
       }
-      line(dim(`— ${result.status} · ${parts}`));
+      // `cancelled` is an ending nobody asked for, so it is said at every
+      // level that says anything. A clean completion is an accounting line.
+      if (result.status === "cancelled" || internal) line(dim(`— ${result.status} · ${parts}`));
     },
   };
 }

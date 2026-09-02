@@ -47,7 +47,7 @@ const say = (sink: Sink, text: string) => (sink.status ?? sink.write)(`${text}\n
 
 export async function main(task: string, options: Options = {}): Promise<string> {
   const sessionId = options.sessionId ?? crypto.randomUUID();
-  const turns = options.turns ?? turnsFrom({ task, once: options.choice?.once === true });
+  const turns = options.turns ?? turnsFrom({ task });
   const sink: Sink = options.sink
     ?? terminalSink({ ...(choiceDetail(options.choice) ? { detail: choiceDetail(options.choice) } : {}) });
   const choice = options.choice ?? { provider: "openrouter" as const, model: "deepseek/deepseek-v4-flash", sandbox: "local" as const };
