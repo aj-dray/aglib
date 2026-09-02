@@ -217,9 +217,11 @@ It is policy as well as arithmetic. The two applications that wanted a spend lim
 
 ## What an adapter must prove
 
-Two of the four ports ship a conformance suite: `aglib/store/conformance` and
-`aglib/sandbox/conformance`. Each is an inert list of named cases that throw, so the package drags
-no test framework with it and an adapter runs them under whichever one it already has.
+Three of the four ports ship a conformance suite: `aglib/model/conformance`,
+`aglib/store/conformance` and `aglib/sandbox/conformance`. Each is an inert list of named cases that
+throw, so the package drags no test framework with it and an adapter runs them under whichever one
+it already has. `harness` has none, because what a harness may claim varies by design — `recovery`
+is a declaration, not a capability every implementation is held to.
 
 They exist because the ports have several implementations each and the differences that matter do
 not show up in a type. The store's two mechanisms are the clearest case: `expectedSeq` and the claim

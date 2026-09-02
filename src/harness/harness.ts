@@ -111,7 +111,7 @@ export type HarnessResult =
  *
  * The question it was reaching for — did anyone authorize this call — is a fact
  * about a call, not about a harness, and belongs on the tool entry if and when
- * something needs to read it. `recipes/vendored-agents` and
+ * something needs to read it. `recipes/vendored-agent` and
  * `docs/ARCHITECTURE.md` carry the per-adapter comparison in prose, which is
  * where a fact about adapters belongs and where it can be accurate.
  */

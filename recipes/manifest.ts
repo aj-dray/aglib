@@ -1,8 +1,8 @@
 /** Every runnable recipe. `bun run recipe <name>` and the gate both read this. */
 export const recipeManifest = [
-  { name: "native-agents", entry: "recipes/native-agents/index.ts" },
-  { name: "vendored-agents", entry: "recipes/vendored-agents/index.ts" },
-  { name: "coding-agents", entry: "recipes/coding-agents/index.ts" },
+  { name: "native-agent", entry: "recipes/native-agent/index.ts" },
+  { name: "vendored-agent", entry: "recipes/vendored-agent/index.ts" },
+  { name: "coding-agent", entry: "recipes/coding-agent/index.ts" },
 ] as const;
 
 export const recipeNames = recipeManifest.map((recipe) => recipe.name);

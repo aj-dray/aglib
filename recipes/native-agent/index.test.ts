@@ -110,7 +110,7 @@ test("a channel maps a thread onto one session, and the worker answers it", asyn
   await withHome(async (home) => {
     const database = new Database(join(home, "agent.db"), { create: true });
     const store = createSqliteStore({ database });
-    const agent = { id: "native-agents", version: "1" };
+    const agent = { id: "native-agent", version: "1" };
     const message = { thread: "t-1", sender: "someone@example.com", body: "What is the balance?" };
 
     const first = await receive({ store, agent, message });

@@ -22,8 +22,8 @@ the rendering, the accounting and the handoff are the same in all three, and wha
 bun install --frozen-lockfile
 echo 'OPENROUTER_API_KEY=sk-or-...' > .env
 
-bun run recipe native-agents                      # a conversation, in your terminal
-bun run recipe native-agents "what did I decide?"  # …or one shot, for a pipe
+bun run recipe native-agent                      # a conversation, in your terminal
+bun run recipe native-agent "what did I decide?"  # …or one shot, for a pipe
 ```
 
 ## The shape
@@ -81,7 +81,10 @@ obstacle: fix the code, or change the check deliberately in the same commit
 with the reason in the message.
 
 Live tests cost money and are opt-in twice — the credential, and a flag:
-`AGLIB_LIVE_MODEL=1`, `AGLIB_LIVE_SANDBOX=1`, `AGLIB_LIVE_ACP=1`.
+`AGLIB_LIVE_MODEL=1` for the cases that reach a provider, `AGLIB_LIVE_ACP=1` for
+the ones that start a vendor's agent over `npx`. The Docker cases need no flag:
+they run where a daemon and the image are already there, and name themselves
+when they skip.
 
 ## License
 
