@@ -20,6 +20,7 @@ import { memoryTools, readMemory, renderMemory } from "./memory.ts";
 import { listSkills, renderSkillIndex, skillTools } from "./skills.ts";
 import { bashTools, openSandbox, type SandboxKind } from "./sandbox.ts";
 import { drain, isChild, reportToParent, spawnTools } from "./spawn.ts";
+import { sendTools, terminalChannel } from "./send.ts";
 import { createChosenModel, parseArguments, type Choice } from "./model.ts";
 import { terminalSink, turnsFrom, type TurnSource } from "aglib/terminal";
 import { runCommand } from "./commands.ts";
@@ -91,7 +92,15 @@ export async function main(task: string, options: Options = {}): Promise<string>
     finished: (run) => reportToParent({ store, sessionId: run.sessionId, output: textOf(run.output) }),
   };
 
-  const tools = [...hands, ...memoryTools(home.memory), ...spawnTools({ store, agent: identity })];
+  // `send` is the parent's and not a hand. A child writing through this sink
+  // would print unattributed, while `drain` labels everything else a child
+  // says — and what a child needs to report, `finished` already delivers.
+  const tools = [
+    ...hands,
+    ...memoryTools(home.memory),
+    ...spawnTools({ store, agent: identity }),
+    ...sendTools({ channels: { operator: terminalChannel(sink) }, store }),
+  ];
   let parent: Agent = { ...identity, instructions, harness: harness(), tools };
 
   // Run-scoped: inside the cached prefix, fixed for the whole *run*, and read

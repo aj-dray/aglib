@@ -67,6 +67,7 @@ partial text, which is most of what debugging one is.
 | Subagents, and their answers coming back | aglib — `enqueue`, `next`, and the `finished` hook |
 | Containment, or an explicit refusal to pretend | aglib — `isolation: "required"` against two providers |
 | Memory, skills, channels | this recipe — a markdown file, a directory, and one function |
+| Saying something before the turn ends | this recipe — `send`, one tool over `enqueue` |
 
 ## `~/.agent`
 
@@ -112,6 +113,40 @@ paid for them:
 Writes are durable immediately and visible from the *next* conversation. The
 entries sit in the cached prefix, and rewriting that mid-run would invalidate
 the cache on every turn after it.
+
+## Saying something before the turn ends
+
+An activation has exactly one answer — `RunResult.output`, handed to whoever
+asked — which is the right default and also why a two-minute task is two minutes
+of silence. `send` is the way out:
+
+```
+send { to: "operator", content: "Checking now — this will take a moment." }
+send { to: "<session id>", content: "Check the logs too." }
+```
+
+A tool rather than a field on the model's output, because sending a message is
+an effect and `decide` runs on a tool call before it happens.
+
+**The recipient is an address, not a kind**, so a person and a subagent are
+interchangeable on the other end. What is not interchangeable is the guarantee,
+and the result says which one you got: a delivery to a session commits in the
+same compare-and-swap as the turn that asked for it, while a channel is a call
+to somewhere else that can simply fail.
+
+**One session, many channels.** `sendTools` takes a map, so this recipe's
+`operator` is one entry and `slack` or `email` are more of the same:
+
+```ts
+sendTools({ channels: { operator: terminalChannel(sink), slack: slackChannel(client) } })
+```
+
+Inbound is the same fact from the other side. A message from anywhere is a
+`Delivery` with `from: { kind: "slack", id: "#ops" }`, and `toMessages` shows the
+model `[from slack #ops]` above it — the kind is the application's word, not
+one the library knows. So one transcript can carry every channel a person
+reaches this agent on, and replying where a message came from is reading `from`
+and passing it as `to`.
 
 ## Subagents
 
