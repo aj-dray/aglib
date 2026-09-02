@@ -16,7 +16,7 @@ export interface SqliteDatabase {
   query(sql: string): { all(...parameters: unknown[]): unknown[]; run(...parameters: unknown[]): unknown };
 }
 
-const schema = `
+const tables = `
   CREATE TABLE IF NOT EXISTS sessions (
     id            TEXT PRIMARY KEY,
     agent_id      TEXT NOT NULL,
@@ -42,6 +42,22 @@ const schema = `
     at          TEXT NOT NULL,
     PRIMARY KEY (session_id, sender, delivery_id)
   );
+`;
+
+/**
+ * Columns added after a table had already shipped.
+ *
+ * `CREATE TABLE IF NOT EXISTS` is a no-op against a table that exists, so a
+ * column added later never appears in a database made by an older build — and
+ * the first index over it fails with a raw `SQLiteError` from inside `bun:sqlite`,
+ * which is no way to meet a store whose whole promise is that the log survives.
+ * Additive only: a column is added, nothing is dropped, rewritten or lost.
+ */
+const added: readonly { table: string; column: string; type: string }[] = [
+  { table: "sessions", column: "running_since", type: "TEXT" },
+];
+
+const indexes = `
   CREATE INDEX IF NOT EXISTS sessions_by_key ON sessions (key, updated_at DESC, id DESC);
   CREATE INDEX IF NOT EXISTS sessions_runnable ON sessions (updated_at) WHERE pending <> '[]';
   DROP INDEX IF EXISTS sessions_stranded; -- sessions_interrupted under its former name
@@ -90,7 +106,16 @@ export function createSqliteStore(input: {
   const database = input.database;
   const claimMs = input.claimMs ?? DEFAULT_CLAIM_MS;
   const deliveryMemoryMs = input.deliveryMemoryMs ?? DEFAULT_DELIVERY_MEMORY_MS;
-  database.exec(schema);
+
+  // Tables, then the columns an older build's tables lack, then the indexes —
+  // which is the only order that works, because an index may be over a column
+  // the migration is about to add.
+  database.exec(tables);
+  for (const { table, column, type } of added) {
+    const present = database.query(`SELECT 1 FROM pragma_table_info(?) WHERE name = ?`).all(table, column);
+    if (!present.length) database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+  }
+  database.exec(indexes);
 
   const one = <T>(sql: string, parameters: readonly unknown[]): T | undefined =>
     database.query(sql).all(...parameters)[0] as T | undefined;

@@ -61,3 +61,27 @@ test("the log lives beside the application's own tables in one handle", async ()
   ).all("acme") as { subject: string }[];
   expect(joined).toEqual([{ subject: "billing" }]);
 });
+
+test("a database from an older build gains the column it lacks, and keeps its log", async () => {
+  // The failure this prevents was met on a real `~/.agent/agent.db`: an older
+  // build's `sessions` had no `running_since`, `CREATE TABLE IF NOT EXISTS` is
+  // a no-op against a table that exists, and the first index over the column
+  // threw a raw SQLiteError out of bun:sqlite.
+  const database = new Database(":memory:");
+  database.exec(`
+    CREATE TABLE sessions (
+      id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, agent_ver TEXT NOT NULL, key TEXT,
+      metadata TEXT NOT NULL DEFAULT '{}', pending TEXT NOT NULL DEFAULT '[]',
+      last_seq INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL
+    );
+    INSERT INTO sessions (id, agent_id, agent_ver, metadata, pending, last_seq, updated_at)
+    VALUES ('old', 'a', '1', '{}', '[]', 0, '2026-08-31T00:00:00.000Z');
+  `);
+
+  const store = createSqliteStore({ database });
+  const read = await store.read({ sessionId: "old" });
+  expect(read.ok).toBe(true);
+  // Additive: what was there is still there.
+  if (read.ok) expect(read.value.agent).toEqual({ id: "a", version: "1" });
+  await store.close();
+});
