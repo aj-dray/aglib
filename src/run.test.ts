@@ -153,7 +153,11 @@ test("a tool's delivery to another session commits with the run that made it", a
   const runnable = await store.next({});
   if (!runnable.ok || !runnable.value) throw new Error("expected a delivery");
   expect(runnable.value.sessionId).toBe("child");
-  expect(runnable.value.pending).toEqual([{ sessionId: "child", input: "go" }]);
+  // The sender is stamped by the executor, not stated by the tool: `notify`
+  // above never said who it was, and a recipient can still tell.
+  expect(runnable.value.pending).toEqual([
+    { sessionId: "child", input: "go", from: { kind: "session", id: "parent" } },
+  ]);
 });
 
 test("a declared turn limit stops the run and says so", async () => {

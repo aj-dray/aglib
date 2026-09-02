@@ -78,7 +78,9 @@ export function createExecutor(input: {
         const context: ToolContext = {
           sessionId: input.sessionId, runId: input.runId, callId: call.callId,
           signal: signal ?? new AbortController().signal,
-          enqueue: input.enqueue,
+          // Stamped here, and deliberately not taken from the caller: this is
+          // the one place that knows the sender without being told.
+          enqueue: (delivery) => input.enqueue({ ...delivery, from: { kind: "session", id: input.sessionId } }),
           report: (data) => input.report(call.callId, data),
         };
         const annotations = tool.spec.annotations;
