@@ -253,3 +253,108 @@ test("a harness that streams something other than its turn shows both, not neith
     expect(answer.join("")).toContain("1250.");
   });
 });
+
+/**
+ * A tool call is not exclusive, and the spinner used to assume it was.
+ *
+ * Each `tool.started` assigned a fresh interval over the last one without
+ * clearing it, so four concurrent calls left three orphans drawing `\r` to the
+ * same line for the life of the process — fighting each other, and cutting into
+ * streamed text and committed status lines alike. One line, one ticker, and
+ * every timer it starts is cleared.
+ */
+test("concurrent tool calls share one spinner, and every timer it starts is cleared", async () => {
+  const realSet = globalThis.setInterval;
+  const realClear = globalThis.clearInterval;
+  let started = 0;
+  let cleared = 0;
+  globalThis.setInterval = ((...args: Parameters<typeof realSet>) => {
+    started += 1;
+    return realSet(...args);
+  }) as typeof realSet;
+  globalThis.clearInterval = ((timer: Parameters<typeof realClear>[0]) => {
+    cleared += 1;
+    return realClear(timer);
+  }) as typeof realClear;
+
+  try {
+    const { sink } = harness();
+    const calls = ["c1", "c2", "c3", "c4"];
+    await renderRun(runOf([
+      at({
+        type: "assistant", runId: "r", content: "",
+        calls: calls.map((callId) => ({ callId, name: "bash", arguments: "{}" })),
+      }),
+      ...calls.map((callId) => at({ type: "tool.started", runId: "r", callId })),
+      ...calls.map((callId) => at({ type: "tool.finished", runId: "r", callId, result: { content: "ok" } })),
+    ]), { ...sink, tty: true });
+
+    // One line on the terminal, so one thing drawing it however many are running.
+    expect(started).toBe(1);
+    // And it is stopped, rather than left ticking over a finished run.
+    expect(cleared).toBeGreaterThanOrEqual(1);
+  } finally {
+    globalThis.setInterval = realSet;
+    globalThis.clearInterval = realClear;
+  }
+});
+
+/** Erase the spinner and leave the cursor at the start of a clean line. */
+const ERASE = "\r\x1b[K";
+
+/**
+ * Every committed line starts clean, whether or not a spinner was on the line.
+ *
+ * The updates have to arrive over time for this to mean anything. The ticker is
+ * a real 90 ms interval, so a run whose updates all yield synchronously never
+ * draws a frame — and a case that asserts nothing lands on a frame passes for
+ * want of a frame to land on.
+ */
+test("a committed line erases the spinner rather than landing on top of it", async () => {
+  const { sink, status } = harness();
+  const calls = [{ callId: "c1", name: "bash", arguments: "{}" }, { callId: "c2", name: "read", arguments: "{}" }];
+  await renderRun({
+    async *[Symbol.asyncIterator]() {
+      yield at({ type: "assistant", runId: "r", content: "", calls });
+      yield at({ type: "tool.started", runId: "r", callId: "c1" });
+      yield at({ type: "tool.started", runId: "r", callId: "c2" });
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      yield at({ type: "tool.finished", runId: "r", callId: "c1", result: { content: "ok" } });
+    },
+    result: Promise.resolve(completed()),
+    cancel: () => {},
+  }, { ...sink, tty: true });
+
+  const frames = status.filter((written) => written.startsWith("\r") && written !== ERASE);
+  // Without one of these on the line there is nothing to erase and this case
+  // proves nothing, so it says so rather than passing quietly.
+  expect(frames.length).toBeGreaterThan(0);
+
+  // Nothing the reader keeps is glued to the end of a frame: wherever a line
+  // follows cursor control, the cursor control was the erase.
+  for (const [index, written] of status.entries()) {
+    if (written.startsWith("\r")) continue;
+    const before = status[index - 1];
+    if (before?.startsWith("\r")) expect(before).toBe(ERASE);
+  }
+});
+
+/**
+ * A turn's own words are not a prefix of the next turn's.
+ *
+ * `streamed` records what a reader has already seen of the entry about to
+ * arrive, so only a delta may add to it. Writing an entry through the same door
+ * left that entry's text in there, and the next turn was then measured against
+ * a prefix it does not begin with — so `startsWith` failed and the whole turn
+ * printed again, under the half that had already streamed.
+ */
+test("a second turn prints what streamed and no more, whatever the first turn said", async () => {
+  const { sink, answer } = harness();
+  await renderRun(runOf([
+    at({ type: "assistant", runId: "r", content: "Looking around." }, 1),
+    { type: "text.delta", text: "The balance is " },
+    at({ type: "assistant", runId: "r", content: "The balance is 1250." }, 2),
+  ]), sink);
+
+  expect(answer.join("")).toBe("Looking around.\nThe balance is 1250.\n");
+});

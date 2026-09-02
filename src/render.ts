@@ -107,6 +107,16 @@ interface Renderer {
   finish(result: RunResult): void;
 }
 
+/**
+ * The one animation, and it is data rather than a dependency.
+ *
+ * Braille dots because they are one column wide in every terminal that has the
+ * font and degrade to boxes rather than to a broken layout in the ones that do
+ * not. Written to `status`, so the answer channel stays something a pipe can
+ * read.
+ */
+const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
+
 const DIM = "\x1b[2m";
 const RED = "\x1b[31m";
 const GREEN = "\x1b[32m";
@@ -179,27 +189,101 @@ function createRenderer(sink: Sink): Renderer {
   /** Whether the last thing written ended mid-line, so a status line can open a fresh one. */
   let open = false;
   let thinking = false;
+
+  /**
+   * The calls in flight, and the one status line describing all of them.
+   *
+   * One ticker for the renderer rather than one per call. A tool call is not
+   * exclusive — a harness may start four at once, and Pi does — and a per-call
+   * interval meant each `tool.started` overwrote the last without clearing it:
+   * the orphans kept drawing to the same line for the life of the process,
+   * fighting each other and interleaving with committed lines. A terminal has
+   * one status line, so there is one thing drawing it.
+   *
+   * No `at` is kept here. `clocks` already holds when each call started, and a
+   * second copy is a second answer.
+   */
+  const running = new Set<string>();
   let ticker: ReturnType<typeof setInterval> | undefined;
+  /** Whether the status line currently holds a spinner that must be erased before anything else. */
+  let drawn = false;
+
+  /**
+   * Erase the spinner, leaving the cursor at the start of a clean line.
+   *
+   * Called before *every* write, because `\r` returns to the start of whatever
+   * line is current and half a streamed sentence is as much a casualty as a
+   * status line. The ticker redraws on its next tick if work is still in
+   * flight, so this costs nothing but a frame.
+   */
+  const clearSpinner = () => {
+    if (!drawn) return;
+    drawn = false;
+    status("\r\x1b[K");
+  };
 
   const line = (text: string) => {
+    clearSpinner();
     if (open) { sink.write("\n"); open = false; }
     status(`${label}${text}\n`);
   };
 
   const stopTicker = () => {
-    if (!ticker) return;
-    clearInterval(ticker);
-    ticker = undefined;
-    if (sink.tty) status("\r\x1b[K");
+    if (ticker) { clearInterval(ticker); ticker = undefined; }
+    clearSpinner();
+  };
+
+  /**
+   * What is running, in the width of one line.
+   *
+   * The oldest call names itself and carries the clock, because it is the one a
+   * reader is waiting on; the rest are a count. Naming all four would be a
+   * line that changes width every time one finishes.
+   */
+  const inFlight = (glyph: string): string => {
+    const oldest = [...running].sort((a, b) => (clocks.get(a) ?? 0) - (clocks.get(b) ?? 0))[0];
+    if (oldest === undefined) return "";
+    const name = names.get(oldest) ?? oldest.slice(0, 8);
+    const others = running.size - 1;
+    return `${label}${glyph} ${name}${others ? ` +${others}` : ""} ${seconds(now() - (clocks.get(oldest) ?? now()))}`;
+  };
+
+  /**
+   * The one piece of cursor control in this file, and the only reason a long
+   * command is not silence. Unref'd so it can never hold a process open.
+   *
+   * It does not draw over an open line: `say` leaves the cursor mid-sentence
+   * while text streams, and `\r` there would eat the sentence. Nothing is lost
+   * — the next tick after the newline draws it.
+   */
+  const startTicker = () => {
+    if (ticker || !sink.tty) return;
+    let frame = 0;
+    ticker = setInterval(() => {
+      if (open || !running.size) return;
+      const text = inFlight(SPINNER[frame++ % SPINNER.length]!);
+      if (!text) return;
+      drawn = true;
+      status(`\r${DIM}${text}${RESET}\x1b[K`);
+    }, 90);
+    ticker.unref?.();
   };
 
   /** Partial line held back while a labelled run streams, so the prefix stays whole. */
   let held = "";
 
-  const say = (text: string) => {
-    stopTicker();
+  /**
+   * Write text for the reader. The primitive; `say` is the streaming door to it.
+   *
+   * Only a delta counts as *streamed*. An entry printed through here must not
+   * be added to `streamed`, or its own words become the "already shown" prefix
+   * the next entry is measured against — and since a second turn's text does
+   * not begin with a first turn's, `startsWith` failed and the whole turn was
+   * printed again under the half that had already streamed.
+   */
+  const emit = (text: string) => {
+    clearSpinner();
     if (thinking) { thinking = false; }
-    streamed += text;
     if (!sink.label) {
       sink.write(text);
       open = !text.endsWith("\n");
@@ -215,6 +299,9 @@ function createRenderer(sink: Sink): Renderer {
       cut = held.indexOf("\n");
     }
   };
+
+  /** A delta: written, and recorded as the part of the coming entry already shown. */
+  const say = (text: string) => { streamed += text; emit(text); };
 
   const entry = (stored: Stored) => {
     if (stored.type === "run.started") {
@@ -235,14 +322,14 @@ function createRenderer(sink: Sink): Renderer {
         // Cleared first: `say` appends to it, and what matters is what had been
         // streamed *before* this entry arrived.
         streamed = "";
-        if (!shown) say(said.endsWith("\n") ? said : `${said}\n`);
+        if (!shown) emit(said.endsWith("\n") ? said : `${said}\n`);
         else if (said.startsWith(shown)) {
           const rest = said.slice(shown.length);
-          if (rest) say(rest.endsWith("\n") ? rest : `${rest}\n`);
-          else if (open) say("\n");
+          if (rest) emit(rest.endsWith("\n") ? rest : `${rest}\n`);
+          else if (open) emit("\n");
         } else {
           if (open) sink.write("\n");
-          say(said.endsWith("\n") ? said : `${said}\n`);
+          emit(said.endsWith("\n") ? said : `${said}\n`);
         }
       } else {
         streamed = "";
@@ -258,21 +345,16 @@ function createRenderer(sink: Sink): Renderer {
     }
     if (stored.type === "tool.started") {
       clocks.set(stored.callId, now());
-      if (!sink.tty) return;
       // At every level, unlike everything else about a call. A spinner is not
       // an account of what the agent did — it leaves no trace, and it is the
       // only thing between a reader and thirty seconds of silence.
-      //
-      // The one piece of cursor control in this file, and the only reason a
-      // long command is not silence. Unref'd so it can never hold a process open.
-      const at = now();
-      const name = names.get(stored.callId) ?? stored.callId.slice(0, 8);
-      ticker = setInterval(() => { status(`\r${DIM}${label}  ${name} ${seconds(now() - at)}${RESET}\x1b[K`); }, 1000);
-      ticker.unref?.();
+      running.add(stored.callId);
+      startTicker();
       return;
     }
     if (stored.type === "tool.finished") {
-      stopTicker();
+      running.delete(stored.callId);
+      if (!running.size) stopTicker();
       const at = clocks.get(stored.callId);
       clocks.delete(stored.callId);
       const name = names.get(stored.callId) ?? stored.callId.slice(0, 8);
@@ -308,7 +390,7 @@ function createRenderer(sink: Sink): Renderer {
         // `"detailed"` rather than dimmed and always present.
         if (!debugging) return;
         if (!thinking) { line(dim("· thinking")); thinking = true; }
-        stopTicker();
+        clearSpinner();
         status(dim(next.text));
         return;
       }
@@ -335,6 +417,7 @@ function createRenderer(sink: Sink): Renderer {
     },
 
     finish(result) {
+      running.clear();
       stopTicker();
       if (held) { line(held); held = ""; }
       if (open) { sink.write("\n"); open = false; }
