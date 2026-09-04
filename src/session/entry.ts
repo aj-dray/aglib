@@ -131,9 +131,10 @@ export interface Delivery {
   input: Content;
   /**
    * Who sent it. Absent means the application did not say — not that nobody
-   * did. Recorded on the receiving `run.started`, so a recipient can tell a
+   * did. Recorded on the receiving `run.started`, so an application can tell a
    * peer's message from its user's, and can see that it already answered one
-   * that arrives twice.
+   * that arrives twice. It becomes text the model reads only where the
+   * recipient's agent asks, with `attribution`.
    */
   from?: From;
   /**

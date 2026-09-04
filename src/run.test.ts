@@ -300,6 +300,46 @@ test("a message arriving mid-activation is folded in without ending the turn", a
   expect(after.value.entries.filter((entry) => entry.type === "run.finished")).toHaveLength(1);
 });
 
+test("a run that keeps calling tools folds without waiting to end", async () => {
+  // The shape that could not compact: inside one activation every assistant turn
+  // holds calls until the one that ends the run, so the only log big enough to
+  // need folding was the log with nowhere to cut, and it grew until the provider
+  // refused it.
+  const store = createSqliteStore({ database: new Database(":memory:") });
+  const bulky = defineTool({
+    name: "read_ledger", description: "read", annotations: { readOnly: true },
+    schema: z.object({}),
+    execute: () => ({ content: "1250 ".repeat(400) }),
+  });
+  const model = createFakeModel([
+    ...Array.from({ length: 10 }, (_, index) => ({
+      calls: [{ callId: `c${index}`, name: "read_ledger", arguments: "{}" }],
+    })),
+    { text: "The balance is 1250." },
+  ]);
+  const summariser = createFakeModel(Array.from({ length: 10 }, () => ({ text: "It read the ledger repeatedly." })));
+
+  const result = await runAgent({
+    agent: agentWith(model, {
+      tools: [bulky],
+      harness: createNativeHarness({ model, compaction: { maxInputTokens: 2_000, model: summariser } }),
+    }),
+    store, sessionId: "s", input: "audit the ledger",
+  }).result;
+  expect(result.status).toBe("completed");
+
+  const read = await store.read({ sessionId: "s" });
+  if (!read.ok) throw new Error("read failed");
+  const summaries = read.value.entries.filter((entry) => entry.type === "summary");
+  expect(summaries.length).toBeGreaterThan(0);
+  // Folded inside the activation, which ran to its own end rather than being cut
+  // short — and the fold landed where a batch had been answered in full.
+  expect(read.value.entries.filter((entry) => entry.type === "run.finished")).toHaveLength(1);
+  const first = summaries[0];
+  const replaces = first?.type === "summary" ? first.replaces : 0;
+  expect(read.value.entries.find((entry) => entry.seq === replaces)?.type).toBe("tool.finished");
+});
+
 // ---- What a run consumed ---------------------------------------------------
 
 const priced = { inputTokens: 1_000, outputTokens: 100 };

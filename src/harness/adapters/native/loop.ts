@@ -8,8 +8,25 @@ export interface NativeHarnessOptions {
   model: Model;
   /** Fold older turns into a summary once a request passes this size. */
   compaction?: {
+    /**
+     * The estimated request size a fold happens above.
+     *
+     * A budget, not a provider fact: it belongs below the input window of the
+     * model that answers, with room for the turn that follows the fold. Folding
+     * early spends a model call and hands the run a paraphrase of work the log
+     * still holds in full; folding late risks the request a provider refuses.
+     */
     maxInputTokens: number;
-    /** Defaults to the main model. A cheaper one is usually the right call. */
+    /**
+     * Who writes the summary. Defaults to the run's own model, so an
+     * application that says nothing meets neither a second provider nor a
+     * second credential.
+     *
+     * A cheaper one is right where the span being folded is long and reading it
+     * back is all the work — this is not the reasoning the main model is being
+     * paid for. It still has to take the whole span in one request, and to be
+     * good enough that what it drops is what did not matter.
+     */
     model?: Model;
     prompt?: (messages: readonly Message[]) => string;
   };

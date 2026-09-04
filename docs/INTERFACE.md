@@ -28,6 +28,20 @@ one besides tools. Getting the split right is the loop's job because only the lo
 prefix ends; a fact written mid-run therefore applies from the next run, because rewriting a cached
 prefix invalidates every following turn.
 
+## Keeping a long conversation in budget
+
+`compaction` on the native harness folds older turns into a summary once the estimated request
+passes `maxInputTokens`. The cut lands on a **drained** boundary — a point where every call an
+assistant turn asked for has its result — so a call is never separated from its result, and a run
+that has been calling tools for an hour without stopping has somewhere to cut like any other.
+Nothing is deleted: a summary is an entry saying what it replaces, the newest fraction of the log
+stays verbatim, and the turns underneath are still there to read.
+
+`maxInputTokens` is the application's budget rather than a provider fact, and it belongs below the
+input window of the model that answers with room for the turn after the fold. The summary is written
+by the run's own model unless `compaction.model` names another — a cheaper long-context one is right
+where the span is long and reading it back is all the work.
+
 ## What a run consumed
 
 A run answers with `usage` on every outcome, because a run that burned a thousand tokens and then failed burned them. It is summed from the `assistant` entries the activation committed, so a harness reports no total of its own and a cancelled run still says what it cost.
@@ -127,7 +141,9 @@ await store.append({
 
 Three places, each one thing. A harness that cannot reach one falls back to a **later** place, never an earlier one: a loop with no safe point mid-turn cannot do `turn`, so the message waits rather than the activation being ended instead. An application answering a sender tells it which place was reached, so "later than you asked" is visible rather than silent.
 
-Input carries `from` onto the recipient's `run.started` — `{ kind, id }`, naming what sort of sender it was and which one. aglib mints exactly one kind, `"session"`; a person, a channel, a schedule and a webhook are the application's words, because only the application can close that list. The projection names it in the turn itself, so a recipient can tell a person typing from a peer agent from a routine firing, and can see that it has already answered one that arrived twice.
+Input carries `from` onto the recipient's `run.started` — `{ kind, id }`, naming what sort of sender it was and which one. aglib mints exactly one kind, `"session"`; a person, a channel, a schedule and a webhook are the application's words, because only the application can close that list. It is provenance the log keeps, and an application reads it to tell a person typing from a peer agent from a routine firing, and to see that it has already answered one that arrived twice.
+
+`agent.attribution` decides whether the model reads it too: with it on, each arrival is prefixed `[from kind id]`. Off by default, and the default is the common case — an application that renders a sender into the input it delivers can say it in words its agent knows, and a second name beside that one is a session id the model can do nothing with.
 
 ## Where an agent's hands are
 

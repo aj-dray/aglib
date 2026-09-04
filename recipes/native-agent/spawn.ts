@@ -79,7 +79,10 @@ export async function reportToParent(input: {
   if (!parent) return [];
   return [{
     sessionId: parent,
-    input: `Subagent ${input.sessionId} reports:\n\n${input.output}`,
+    // The report itself. Who is reporting is `from`, and the parent runs with
+    // `attribution`, so naming the child here as well would put two names for
+    // one sender in front of the model.
+    input: input.output,
     from: { kind: "session", id: input.sessionId },
     // The place that costs nothing: folded into the parent's turn if one is
     // running, and the start of the next one if not. Never an interrupt — the

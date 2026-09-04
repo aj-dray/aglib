@@ -130,12 +130,14 @@ test("a spawned subagent runs from the queue, and its report reaches the parent"
     expect(childRow).toBeDefined();
     expect(JSON.parse(childRow!.metadata ?? "{}").parentSessionId).toBe(sessionId);
 
-    // The parent's log carries the child's report as input it received.
+    // The parent's log carries the child's report as input it received, with the
+    // child named as the sender rather than a second time inside the report.
     const inputs = (database.query("SELECT body FROM entries WHERE session_id = ? ORDER BY seq")
       .all(sessionId) as { body: string }[])
-      .map((entry) => JSON.parse(entry.body) as { type: string; input?: unknown })
+      .map((entry) => JSON.parse(entry.body) as { type: string; input?: unknown; from?: { kind: string } })
       .filter((entry) => entry.type === "run.started");
-    expect(JSON.stringify(inputs)).toContain("Subagent");
+    expect(inputs.at(-1)?.input).toBe("September closes at 1250 GBP.");
+    expect(inputs.at(-1)?.from?.kind).toBe("session");
     expect(said.join("")).toContain("1250 GBP");
 
     // Nothing is left owed to anyone: the queue is a column on the session,
