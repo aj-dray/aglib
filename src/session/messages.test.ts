@@ -70,21 +70,33 @@ test("a call whose result never committed is closed, not left dangling", () => {
   expect(String((last as { content: string }).content)).toContain("did not report back");
 });
 
+const arrivals = log(
+  { type: "run.started", runId: "r", input: "did you see this?", from: { kind: "session", id: "scout" } },
+  { type: "run.started", runId: "r", input: "and this?", from: { kind: "human", id: "adam" } },
+  { type: "run.started", runId: "r", input: "unattributed" },
+);
+
 test("names the sender on an arrival, in the application's own words", () => {
-  const messages = toMessages({
-    instructions: "i",
-    entries: log(
-      { type: "run.started", runId: "r", input: "did you see this?", from: { kind: "session", id: "scout" } },
-      { type: "run.started", runId: "r", input: "and this?", from: { kind: "human", id: "adam" } },
-      { type: "run.started", runId: "r", input: "unattributed" },
-    ),
-  });
-  const text = messages.map((message) => String(message.content));
-  // Both halves reach the model. A recipient that can see something arrived but
-  // not whether a person or a peer sent it is the defect the pair exists to fix,
-  // and the kind is the application's word, not one this package knows.
+  const text = toMessages({ instructions: "i", entries: arrivals, attribution: true })
+    .map((message) => String(message.content));
+  // Both halves reach the model. An agent that can see something arrived but not
+  // whether a person or a peer sent it is the defect the pair exists to fix, and
+  // the kind is the application's word, not one this package knows.
   expect(text[1]).toContain("[from session scout]");
   expect(text[2]).toContain("[from human adam]");
   // Absent means the application did not say. Nothing is invented for it.
   expect(text[3]).toBe("unattributed");
+});
+
+test("unasked, an arrival is the input and nothing else", () => {
+  const text = toMessages({ instructions: "i", entries: arrivals })
+    .map((message) => String(message.content));
+  // The default, because an application that renders its own attribution would
+  // otherwise hand the model two names for one sender.
+  expect(text[1]).toBe("did you see this?");
+  expect(text.join("")).not.toContain("[from");
+  // The provenance is still on the log. This decides what the model reads, not
+  // what was recorded.
+  const first = arrivals[0];
+  expect(first?.type === "run.started" && first.from).toEqual({ kind: "session", id: "scout" });
 });

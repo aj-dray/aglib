@@ -296,6 +296,7 @@ export function runAgent(options: RunAgentOptions): AgentRun {
         history: () => toMessages({
           instructions: agent.instructions,
           entries: log.entries,
+          ...(agent.attribution ? { attribution: true } : {}),
           ...(options.context ? { context: options.context } : {}),
         }),
         entries: () => log.entries,

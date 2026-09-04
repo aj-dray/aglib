@@ -16,6 +16,18 @@ export interface Agent {
   tools?: readonly Tool[];
   /** Per-call policy over parsed arguments. Absent means every call executes. */
   decide?: Decide;
+  /**
+   * Name each arrival's sender in the turn the model reads, as `[from kind id]`.
+   *
+   * Off by default, because two separate things were one: `from` is provenance
+   * the log holds whatever this says, and this is text in a prompt. An
+   * application that renders its own attribution into the input it delivers —
+   * most do, since only they can name a sender in words their agent knows —
+   * would otherwise have the model read two names for one sender, one of them a
+   * session id that means nothing to it. Turn it on where nothing else says who
+   * wrote.
+   */
+  attribution?: boolean;
   /** Runs once as an activation ends, whatever ended it; its deliveries commit with the final entries. */
   finished?(run: {
     sessionId: string; runId: string;

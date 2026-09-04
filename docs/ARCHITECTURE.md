@@ -184,7 +184,7 @@ A `Delivery` carries four things beyond its content:
 | Field | Why it exists |
 | --- | --- |
 | `sessionId` | Who receives it. |
-| `from` | Who sent it: `{ kind, id }`. aglib mints one kind — `"session"` — and interprets no other; every other kind is the application's word for one of its own senders, and only the application can close that list. Absent means the application did not say. Recorded on the receiving `run.started`, so a recipient can tell a peer's message from its user's, and can see that it already answered one that arrives twice. |
+| `from` | Who sent it: `{ kind, id }`. aglib mints one kind — `"session"` — and interprets no other; every other kind is the application's word for one of its own senders, and only the application can close that list. Absent means the application did not say. Recorded on the receiving `run.started`, so an application can tell a peer's message from its user's, and can see that it already answered one that arrives twice. Whether the model reads it is the recipient agent's `attribution`, and the two are separate: provenance is a fact on the log, a label is text in a prompt, and an application that already names its senders in its own words would be handing the model a second name for one of them. |
 | `priority` | Where in the recipient's loop it lands: `interrupt`, `turn`, or `next`. |
 | `id` | The sender's key for this delivery, so a retried send does not arrive twice. |
 

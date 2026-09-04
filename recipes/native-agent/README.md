@@ -142,11 +142,14 @@ sendTools({ channels: { operator: terminalChannel(sink), slack: slackChannel(cli
 ```
 
 Inbound is the same fact from the other side. A message from anywhere is a
-`Delivery` with `from: { kind: "slack", id: "#ops" }`, and `toMessages` shows the
-model `[from slack #ops]` above it — the kind is the application's word, not
-one the library knows. So one transcript can carry every channel a person
-reaches this agent on, and replying where a message came from is reading `from`
-and passing it as `to`.
+`Delivery` with `from: { kind: "slack", id: "#ops" }`, and this agent sets
+`attribution`, so the model reads `[from slack #ops]` above it — the kind is the
+application's word, not one the library knows. It is set here because nothing
+else says who wrote: an email arrives as its body and a child's report as its
+answer. An application that names the sender in the input itself leaves it off
+and the model reads one name rather than two. So one transcript can carry every
+channel a person reaches this agent on, and replying where a message came from
+is reading `from` and passing it as `to`.
 
 ## Subagents
 

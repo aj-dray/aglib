@@ -20,7 +20,7 @@ export function foldedThrough(entries: readonly Stored[]): number {
 }
 
 /** Names the sender in the turn itself, since only text reaches the model. */
-function sent(input: Content, from: From | undefined): Content {
+function labelled(input: Content, from: From | undefined): Content {
   if (!from) return input;
   const label = `[from ${from.kind} ${from.id}]`;
   return typeof input === "string"
@@ -39,6 +39,15 @@ export function toMessages(input: {
   instructions: Content;
   entries: readonly Stored[];
   context?: { run?: string; turn?: string };
+  /**
+   * Name each arrival's sender in the turn text, as `[from kind id]`.
+   *
+   * Off by default. `from` is provenance the log keeps whatever this says; an
+   * application that renders its own attribution into the input it delivers
+   * would otherwise hand the model two names for one sender, one of them a
+   * session id that means nothing to it.
+   */
+  attribution?: boolean;
 }): readonly Message[] {
   const messages: Message[] = [{ role: "system", content: input.instructions }];
 
@@ -68,10 +77,10 @@ export function toMessages(input: {
     if (entry.seq <= cut) continue;
     switch (entry.type) {
       case "run.started":
-        // Provenance the model can see. `from` was recorded and then dropped
-        // here, so the documents claimed a recipient could tell a peer's
-        // message from its user's while the only actor that had to could not.
-        messages.push({ role: "user", content: sent(entry.input, entry.from) });
+        messages.push({
+          role: "user",
+          content: input.attribution ? labelled(entry.input, entry.from) : entry.input,
+        });
         break;
       case "assistant": {
         messages.push({

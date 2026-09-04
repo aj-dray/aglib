@@ -101,7 +101,11 @@ export async function main(task: string, options: Options = {}): Promise<string>
     ...spawnTools({ store, agent: identity }),
     ...sendTools({ channels: { operator: terminalChannel(sink) }, store }),
   ];
-  let parent: Agent = { ...identity, instructions, harness: harness(), tools };
+  // `attribution`, because nothing else here says who wrote: a stranger's email
+  // arrives as its body and a subagent's report as its answer, and both carry
+  // the sender only as `from`. A child gets a self-contained goal instead, so it
+  // is told nothing by being told which session sent it.
+  let parent: Agent = { ...identity, instructions, harness: harness(), tools, attribution: true };
 
   // Run-scoped: inside the cached prefix, fixed for the whole *run*, and read
   // again for the next one. Built once for the whole process it was neither —
@@ -132,7 +136,7 @@ export async function main(task: string, options: Options = {}): Promise<string>
           Object.assign(choice, command.select);
           // The subagent too: a child spawned after the switch should run on
           // the model that is answering now, not the one that was.
-          parent = { ...identity, instructions, harness: harness(), tools };
+          parent = { ...parent, harness: harness() };
           child = { ...child, harness: harness() };
           say(sink, `Answering with ${choice.provider} · ${choice.model} from the next turn.`);
           say(sink, "The prompt cache starts again from there.");
