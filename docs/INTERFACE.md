@@ -42,13 +42,11 @@ prefix invalidates every following turn.
 passes `maxInputTokens`. The cut lands on a **drained** boundary — a point where every call an
 assistant turn asked for has its result — so a call is never separated from its result, and a run
 that has been calling tools for an hour without stopping has somewhere to cut like any other.
-Nothing is deleted: a summary is an entry saying what it replaces, the newest fraction of the log
-stays verbatim, and the turns underneath are still there to read.
+Nothing is deleted: the latest summary replaces an older prefix in model context and appears before the retained chronological tail. The cut keeps about 20,000 estimated recent tokens (or 40% of a smaller budget), rather than a fraction of bookkeeping entries. A single oversized exchange can be summarized whole; calls and results are never separated. Repeated compaction incorporates the previous summary once, alongside newly folded messages.
 
 `maxInputTokens` is the application's budget rather than a provider fact, and it belongs below the
 input window of the model that answers with room for the turn after the fold. The summary is written
-by the hook's explicit `model` — a cheaper long-context one is right
-where the span is long and reading it back is all the work.
+by the hook's explicit `model`. Its short checkpoint preserves instructions, evidence, completed effects and unresolved work, including tool arguments and outcomes. Empty, truncated or non-shrinking output never replaces history. A fold that cannot bring the request under budget fails explicitly. Provider input usage anchors the estimate until a compaction changes the context; new messages and tool schemas are estimated without requiring a tokenizer for each provider.
 
 ## What a run consumed
 

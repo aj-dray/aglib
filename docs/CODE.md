@@ -109,6 +109,8 @@ an explicit opt-in: `AGLIB_LIVE_MODEL=1` for the recipe cases that reach a provi
 `AGLIB_LIVE_ACP=1` for the ones that start a vendor's agent over `npx`. A skip prints what would
 unlock it.
 
+Compaction has an opt-in synthetic model eval: `bun scripts/eval-compaction.ts --model <OpenRouter ID> --output <new directory>`, with `OPENROUTER_API_KEY` in the environment. It compares unchanged history, summary-at-end ordering and chronological ordering using the same generated checkpoint, including a second fold. Add `--stress` to run two actual compaction-hook folds above a 553,200-token estimate instead. Neither mode executes tools. Requests, outcomes, checks and reported costs are saved under the output directory; the comparison is a small diagnostic, not a model ranking or proof of exhaustive retention. These paid calls are separate from the gate.
+
 ## The gate
 
 `bun run check` covers typecheck, hermetic tests, the built package on Node, recipe types and tests,

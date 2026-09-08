@@ -50,6 +50,34 @@ test("a summary becomes user context, never an assistant turn", () => {
   expect(messages.at(-1)?.role).toBe("user");
 });
 
+test("a checkpoint precedes newer corrections even when committed after them", () => {
+  const entries = log(
+    { type: "run.started", runId: "r", input: "finish the supplier digest" },
+    { type: "assistant", runId: "r", content: "working on the digest" },
+    { type: "run.started", runId: "r", input: "pause the digest; research people instead" },
+    { type: "summary", runId: "r", content: "The supplier digest is pending.", replaces: 2 },
+  );
+  expect(toMessages({ instructions: "i", entries }).map(message => message.content)).toEqual([
+    "i", "<summary>\nThe supplier digest is pending.\n</summary>", "pause the digest; research people instead",
+  ]);
+});
+
+test("repeated checkpoints appear once, ahead of the retained tail, even when the prior checkpoint lies after the new cutoff", () => {
+  const entries = log(
+    { type: "run.started", runId: "r", input: "old task" },
+    { type: "assistant", runId: "r", content: "old work" },
+    { type: "run.started", runId: "r", input: "first correction" },
+    { type: "run.started", runId: "r", input: "latest correction" },
+    { type: "summary", runId: "r", content: "first checkpoint", replaces: 2 },
+    { type: "summary", runId: "r", content: "second checkpoint", replaces: 3 },
+  );
+  expect(toMessages({ instructions: "i", entries, context: { run: "run context", turn: "turn context" } })
+    .map(message => message.content)).toEqual([
+      "i", "run context", "<summary>\nsecond checkpoint\n</summary>", "latest correction", "turn context",
+    ]);
+  expect(entries).toHaveLength(6);
+});
+
 test("a call whose result never committed is closed, not left dangling", () => {
   // A provider rejects an assistant turn holding a call with no result, so a
   // session interrupted between asking and answering would otherwise be stuck

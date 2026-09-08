@@ -58,6 +58,10 @@ export function toMessages(input: {
   // A summary folds everything up to `replaces`. The source entries stay in the
   // log — compaction changes what the model sees, never what happened.
   const cut = foldedThrough(input.entries);
+  const summary = input.entries.findLast((entry) => entry.type === "summary" && entry.replaces === cut);
+  if (summary?.type === "summary") {
+    messages.push({ role: "user", content: `<summary>\n${summary.content}\n</summary>` });
+  }
 
   // A call whose result never committed. It happens when an activation ends
   // between asking and answering — cancelled, interrupted, or beaten to the
@@ -70,11 +74,9 @@ export function toMessages(input: {
   );
 
   for (const entry of input.entries) {
-    // A summary folds like anything else it covers. Exempting the whole type
-    // kept every summary ever written, so a long session carried a chain of
-    // them whose content was already inside the newest — duplicated, and
-    // rewriting the cached prefix each time one was added.
-    if (entry.seq <= cut) continue;
+    // The checkpoint describes the replaced prefix, not the moment it was
+    // written. Newer instructions must follow it, including after another fold.
+    if (entry.seq <= cut || entry.type === "summary") continue;
     switch (entry.type) {
       case "hook.input":
         messages.push({ role: "user", content: entry.input });
@@ -107,11 +109,6 @@ export function toMessages(input: {
           content: entry.result.content,
           ...(entry.result.isError ? { isError: true } : {}),
         });
-        break;
-      case "summary":
-        // Delimited user context rather than an assistant turn: attributing a
-        // summary to the assistant puts words in the model's mouth it never said.
-        messages.push({ role: "user", content: `<summary>\n${entry.content}\n</summary>` });
         break;
       // Not model-visible: tool.started is bookkeeping and run.finished is a
       // boundary.
