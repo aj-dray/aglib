@@ -174,6 +174,8 @@ is more than one.
 
 ## Messaging
 
+One append may deliver to several sessions. Each recipient keeps its own delivery identity and queue: consuming one recipient's input does not consume another's, and a retry does not redeliver to either. If any recipient is missing, neither the sender's entries nor any recipient's input commits. Applications can compose shared conversations from these deliveries without giving the library a participant graph.
+
 One session delivering input to another is `append({ entries, enqueue })`: what the sender did and
 what the recipient receives commit together, or neither happens. Spawning a child, replying to a
 parent and messaging a peer are all this one operation, which is why there is no separate mailbox,

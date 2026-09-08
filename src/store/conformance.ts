@@ -299,6 +299,49 @@ export function defineStoreConformance(subject: StoreUnderTest): readonly Confor
 
   // ---- The queue and the claim -------------------------------------------
 
+  define("a shared message is delivered once to each recipient, independently of consumption", async (store) => {
+    for (const name of ["sender", "first", "second"]) await created(store, id(name));
+    const enqueue: Delivery[] = ["first", "second"].map((name) => ({
+      sessionId: id(name), input: "shared finding", id: "shared-message",
+      from: { kind: "session", id: id("sender") }, priority: "turn",
+    }));
+    const written = got(await store.append({
+      sessionId: id("sender"), expectedSeq: 0, entries: [said("send a finding")], enqueue,
+    }), "send to both recipients");
+    const first = got(await store.read({ sessionId: id("first") }), "first recipient");
+    const second = got(await store.read({ sessionId: id("second") }), "second recipient");
+    equals(first.pending.length, 1, "the first receives the message");
+    equals(second.pending.length, 1, "the same delivery id also reaches the second");
+    got(await store.append({
+      sessionId: id("first"), expectedSeq: first.seq,
+      entries: [said("shared finding", id("recipient-run")), ended(id("recipient-run"))], takePending: 1,
+    }), "consume only the first recipient's input");
+    got(await store.append({
+      sessionId: id("sender"), expectedSeq: written.seq, entries: [], enqueue,
+    }), "retry the shared message");
+    equals(got(await store.read({ sessionId: id("first") }), "first after retry").pending.length, 0,
+      "a consumed delivery is not recreated");
+    equals(got(await store.read({ sessionId: id("second") }), "second after retry").pending.length, 1,
+      "the other recipient still has precisely its original delivery");
+  });
+
+  define("one missing recipient rolls back every delivery and the sender's entries", async (store) => {
+    await created(store, id("sender"));
+    await created(store, id("recipient"));
+    const written = await store.append({
+      sessionId: id("sender"), expectedSeq: 0, entries: [said("share this")],
+      enqueue: [
+        { sessionId: id("recipient"), input: "must not arrive", id: "message" },
+        { sessionId: id("missing"), input: "must not arrive", id: "message" },
+      ],
+    });
+    holds(!written.ok, "a missing recipient refuses the append");
+    equals(written.error.code, "not-found", "the missing recipient is named by the error code");
+    equals((await entriesOf(store, id("sender"))).length, 0, "the sender's entries rolled back");
+    equals(got(await store.read({ sessionId: id("recipient") }), "read recipient").pending.length, 0,
+      "no partial delivery survives");
+  });
+
   define("next claims without consuming: the queue survives until an append commits it", async (store) => {
     await created(store, id("s"));
     got(await store.append({
