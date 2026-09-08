@@ -64,7 +64,7 @@ partial text, which is most of what debugging one is.
 | --- | --- |
 | Conversation history, resume | aglib — the session log |
 | Keeping a long conversation in budget | aglib — compaction in the native harness |
-| Subagents, and their answers coming back | aglib — `enqueue`, `next`, and the `finished` hook |
+| Subagents, and their answers coming back | aglib — `enqueue`, `next`, and the `beforeStop` hook |
 | Containment, or an explicit refusal to pretend | aglib — `isolation: "required"` against two providers |
 | Memory, skills, channels | this recipe — a markdown file, a directory, and one function |
 | Saying something before the turn ends | this recipe — `send`, one tool over `enqueue` |
@@ -161,7 +161,7 @@ The mechanism is one write. `enqueue` commits the delivery in the same
 compare-and-swap that commits the turn asking for it, so a spawn is never
 half-done. That is also why `spawn` returns immediately rather than awaiting an
 answer: the delivery does not exist until the turn carrying it commits, so a
-tool that waited here would wait for itself. The child's `finished` hook
+tool that waited here would wait for itself. The child's `beforeStop` hook
 delivers its output back at `priority: "turn"`, and the same worker that ran the
 child picks the parent up again.
 

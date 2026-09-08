@@ -13,7 +13,7 @@
  * instead of awaiting an answer — the delivery does not exist until the turn
  * carrying it commits, so a tool that waited here would wait for itself.
  *
- * The answer comes back the same way. A child's `finished` hook delivers its
+ * The answer comes back the same way. A child's `beforeStop` hook delivers its
  * output to the parent at `priority: "turn"`, which folds into the parent's
  * running activation at its next tool-result boundary, or begins the next one
  * if it has already ended. Parent and child are the same kind of thing talking

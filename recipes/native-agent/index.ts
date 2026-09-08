@@ -10,7 +10,7 @@
 import { runAgent, textOf, type Agent, type RunResult } from "aglib";
 import { renderRun, type Sink } from "aglib/render";
 import { createSqliteStore } from "aglib/store/adapters/sqlite";
-import { createNativeHarness } from "aglib/harness";
+import { createCompactionHook, createNativeHarness, type LifecycleHook } from "aglib/harness";
 import type { Model } from "aglib/model";
 import { Database } from "bun:sqlite";
 import { mkdir } from "node:fs/promises";
@@ -70,11 +70,15 @@ export async function main(task: string, options: Options = {}): Promise<string>
   const harness = () => createNativeHarness({
     model,
     ...(choice.effort ? { effort: choice.effort } : {}),
-    // Personal sessions run long, and compaction is the only memory mechanism
-    // the library itself owns.
-    compaction: { maxInputTokens: 120_000 },
   });
 
+  const hooks = () => [createCompactionHook({ model, maxInputTokens: 120_000 })];
+  const report: LifecycleHook = {
+    name: "report-to-parent",
+    async beforeStop(context, result) {
+      return { deliveries: await reportToParent({ store, sessionId: context.sessionId, output: result.status === "completed" ? textOf(result.output) : result.status }) };
+    },
+  };
   const identity = { id: "native-agent", version: "1" };
   const hands = [...bashTools(sandbox), ...skillTools(home.skills)];
 
@@ -82,19 +86,19 @@ export async function main(task: string, options: Options = {}): Promise<string>
    * A child is the same agent with two things taken away: it cannot spawn (so
    * a delegation tree cannot run away) and it cannot write memory (so what one
    * conversation learned is not rewritten by a task it handed off). What it
-   * gains is `finished`, which is how its answer gets home.
+   * gains is `beforeStop`, which is how its answer gets home.
    */
   let child: Agent = {
     ...identity,
     instructions: `${instructions}\n\nYou are a subagent. Do exactly what you were asked and report the result.`,
     harness: harness(),
     tools: hands,
-    finished: (run) => reportToParent({ store, sessionId: run.sessionId, output: textOf(run.output) }),
+    hooks: [...hooks(), report],
   };
 
   // `send` is the parent's and not a hand. A child writing through this sink
   // would print unattributed, while `drain` labels everything else a child
-  // says — and what a child needs to report, `finished` already delivers.
+  // says — and what a child needs to report, `beforeStop` already delivers.
   const tools = [
     ...hands,
     ...memoryTools(home.memory),
@@ -105,7 +109,7 @@ export async function main(task: string, options: Options = {}): Promise<string>
   // arrives as its body and a subagent's report as its answer, and both carry
   // the sender only as `from`. A child gets a self-contained goal instead, so it
   // is told nothing by being told which session sent it.
-  let parent: Agent = { ...identity, instructions, harness: harness(), tools, attribution: true };
+  let parent: Agent = { ...identity, instructions, harness: harness(), hooks: hooks(), tools, attribution: true };
 
   // Run-scoped: inside the cached prefix, fixed for the whole *run*, and read
   // again for the next one. Built once for the whole process it was neither —
@@ -136,8 +140,8 @@ export async function main(task: string, options: Options = {}): Promise<string>
           Object.assign(choice, command.select);
           // The subagent too: a child spawned after the switch should run on
           // the model that is answering now, not the one that was.
-          parent = { ...parent, harness: harness() };
-          child = { ...child, harness: harness() };
+          parent = { ...parent, harness: harness(), hooks: hooks() };
+          child = { ...child, harness: harness(), hooks: [...hooks(), report] };
           say(sink, `Answering with ${choice.provider} · ${choice.model} from the next turn.`);
           say(sink, "The prompt cache starts again from there.");
         } catch (error) {

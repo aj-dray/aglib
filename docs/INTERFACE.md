@@ -14,6 +14,14 @@ creates a stateful composition, `runX` performs immediate work.
 Adding durability changes the composition around the agent, not the agent. The same definition that
 ran under `runAgent` runs with a store, and what it gains is a durable log and resume.
 
+## Lifecycle hooks
+
+`Agent.hooks` is an ordered list of named, trusted application callbacks: `beforeRun`, `beforeModel`, `afterModel`, `beforeStop`, and `afterRun`. No script runner or second workflow state is involved. Model hooks run only at model boundaries exposed by a harness; the native harness exposes every generation, while an external harness owning its loop need not do so.
+
+`beforeStop` sees the proposed outcome. It may return `{ input }` to continue a normally completed run, or `{ deliveries }` to deliver with the terminal commit. Each named hook can add input once per run, recorded as `hook.input` in the existing log; resuming that run does not reset the allowance. Cancellation, deadlines and failures cannot be continued. Nothing creates another session or queued arrival. Deliveries are collected only when no hook continues the run.
+
+`afterRun` observes the final result after the terminal write, including failures. Its callbacks all run even if one throws; observer errors appear as `hook.error` updates and do not rewrite the run's outcome. Before-boundary callback errors fail the run. Resource cleanup belongs in `afterRun`, not in a stop veto. Hook names must be unique within an agent.
+
 ## The two context slots
 
 An application places context by lifetime, and the loop puts it on the right side of the cache
@@ -30,7 +38,7 @@ prefix invalidates every following turn.
 
 ## Keeping a long conversation in budget
 
-`compaction` on the native harness folds older turns into a summary once the estimated request
+`createCompactionHook` in `Agent.hooks` folds older turns into a summary before a model call once the estimated request
 passes `maxInputTokens`. The cut lands on a **drained** boundary — a point where every call an
 assistant turn asked for has its result — so a call is never separated from its result, and a run
 that has been calling tools for an hour without stopping has somewhere to cut like any other.
@@ -39,7 +47,7 @@ stays verbatim, and the turns underneath are still there to read.
 
 `maxInputTokens` is the application's budget rather than a provider fact, and it belongs below the
 input window of the model that answers with room for the turn after the fold. The summary is written
-by the run's own model unless `compaction.model` names another — a cheaper long-context one is right
+by the hook's explicit `model` — a cheaper long-context one is right
 where the span is long and reading it back is all the work.
 
 ## What a run consumed
@@ -79,7 +87,7 @@ its effect is read from the log rather than asked for again.
 
 Only a harness declaring `recovery: "history"` is given one. A harness declaring `"none"` cannot be
 started on a conversation it cannot see, so the run it was handed is **ended**: the interrupted
-activation is committed as `run.finished` with a `no-recovery` failure, and `agent.finished` fires,
+activation is committed as `run.finished` with a `no-recovery` failure, and `beforeStop` fires,
 so whoever was waiting on that session is told rather than waiting for ever. Refusing without
 writing was the obvious thing and it was wrong — the activation stayed open, and `interrupted` handed
 the same session back every claim window for the rest of its life.

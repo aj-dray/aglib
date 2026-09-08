@@ -76,6 +76,9 @@ export function toMessages(input: {
     // rewriting the cached prefix each time one was added.
     if (entry.seq <= cut) continue;
     switch (entry.type) {
+      case "hook.input":
+        messages.push({ role: "user", content: entry.input });
+        break;
       case "run.started":
         messages.push({
           role: "user",
@@ -123,4 +126,3 @@ export function toMessages(input: {
   if (input.context?.turn) messages.push({ role: "system", content: input.context.turn });
   return messages;
 }
-

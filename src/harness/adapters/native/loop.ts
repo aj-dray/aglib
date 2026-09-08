@@ -1,35 +1,9 @@
 import type { Harness, HarnessContext, HarnessResult } from "../../harness.js";
 import type { Entry } from "../../../session/entry.js";
-import type { Message, Model } from "../../../model/model.js";
-import { foldedThrough, toMessages } from "../../../session/messages.js";
-import { compactionCut, estimateTokens, summarize } from "./compaction.js";
+import type { Model } from "../../../model/model.js";
 
 export interface NativeHarnessOptions {
   model: Model;
-  /** Fold older turns into a summary once a request passes this size. */
-  compaction?: {
-    /**
-     * The estimated request size a fold happens above.
-     *
-     * A budget, not a provider fact: it belongs below the input window of the
-     * model that answers, with room for the turn that follows the fold. Folding
-     * early spends a model call and hands the run a paraphrase of work the log
-     * still holds in full; folding late risks the request a provider refuses.
-     */
-    maxInputTokens: number;
-    /**
-     * Who writes the summary. Defaults to the run's own model, so an
-     * application that says nothing meets neither a second provider nor a
-     * second credential.
-     *
-     * A cheaper one is right where the span being folded is long and reading it
-     * back is all the work — this is not the reasoning the main model is being
-     * paid for. It still has to take the whole span in one request, and to be
-     * good enough that what it drops is what did not matter.
-     */
-    model?: Model;
-    prompt?: (messages: readonly Message[]) => string;
-  };
   maxOutputTokens?: number;
   temperature?: number;
   /** How hard the model should think, where the provider supports it. */
@@ -51,49 +25,16 @@ export function createNativeHarness(options: NativeHarnessOptions): Harness {
 
     async run(context: HarnessContext): Promise<HarnessResult> {
       const { runId } = context;
-      let compacting = true;
 
       for (;;) {
         if (context.signal.aborted) return { status: "cancelled" };
 
-        let history = context.history();
-
-        if (compacting && options.compaction && estimateTokens(history) > options.compaction.maxInputTokens) {
-          const entries = context.entries();
-          const folded = foldedThrough(entries);
-          const cut = compactionCut(entries);
-
-          // Only ever fold forward. A cut at or behind the last summary removes
-          // nothing, so committing one would buy a model call and another entry
-          // and leave the request exactly as large — every turn, without end.
-          if (cut !== undefined && cut > folded) {
-            const summary = await summarize({
-              model: options.compaction.model ?? options.model,
-              // Exactly the span being replaced. Summarizing the whole history
-              // put everything after the cut into the summary as well, so it
-              // stayed in the request twice: once verbatim, once paraphrased.
-              messages: toMessages({
-                instructions: context.instructions,
-                entries: entries.filter((entry) => entry.seq <= cut),
-              }),
-              ...(options.compaction.prompt ? { prompt: options.compaction.prompt } : {}),
-              signal: context.signal,
-            });
-            if (!summary) {
-              // Paid for and produced nothing. Attempted once per activation
-              // rather than once per turn: retrying bought another model call
-              // and another failure every turn, and the request stayed exactly
-              // as large either way.
-              compacting = false;
-            }
-            if (summary) {
-              // The folded entries stay in the log. Compaction changes what the
-              // model is shown on the next turn, never what happened.
-              await context.commit([{ type: "summary", runId, content: summary, replaces: cut }]);
-              history = context.history();
-            }
-          }
+        for (const hook of context.hooks ?? []) {
+          const failure = await hook.beforeModel?.(context);
+          if (failure) return { status: "failed", error: failure };
         }
+        if (context.signal.aborted) return { status: "cancelled" };
+        const history = context.history();
 
         // One cache mark, at the end of the system prefix: instructions plus
         // run-scoped context, which are fixed for the life of the run.
@@ -120,6 +61,7 @@ export function createNativeHarness(options: NativeHarnessOptions): Harness {
           }
           step = await generation.next();
         }
+        for (const hook of context.hooks ?? []) await hook.afterModel?.(context, step.value);
         if (!step.value.ok) {
           return step.value.error.code === "cancelled"
             ? { status: "cancelled" }

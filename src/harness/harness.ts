@@ -1,6 +1,7 @@
 import type { Content } from "../content.js";
-import type { Entry, Stored } from "../session/entry.js";
-import type { Message } from "../model/model.js";
+import type { Delivery, Entry, Stored, Usage } from "../session/entry.js";
+import type { Message, ModelResponse, ModelError } from "../model/model.js";
+import type { Result } from "../result.js";
 import type { ToolExecutor } from "../tools/tool.js";
 import type { Failure } from "../result.js";
 import type { JsonValue } from "../json.js";
@@ -14,6 +15,7 @@ import type { JsonValue } from "../json.js";
  * to the same question into the world.
  */
 export type Update =
+  | { type: "hook.error"; hook: string; message: string }
   | { type: "text.delta"; text: string }
   | { type: "reasoning.delta"; text: string }
   | { type: "tool.progress"; callId: string; data: JsonValue }
@@ -22,6 +24,8 @@ export type Update =
   | { type: "entry"; entry: Stored };
 
 export interface HarnessContext {
+  /** The same callbacks used by the run; a harness invokes model boundaries it owns. */
+  hooks?: readonly LifecycleHook[];
   sessionId: string;
   runId: string;
   instructions: Content;
@@ -93,6 +97,20 @@ export type HarnessResult =
   | { status: "completed"; output: Content }
   | { status: "cancelled" }
   | { status: "failed"; error: Failure };
+
+/** One application extension, configured alongside other lifecycle work. */
+export interface LifecycleHook {
+  name: string;
+  beforeRun?(context: HarnessContext): void | Promise<void>;
+  beforeModel?(context: HarnessContext): void | Failure | Promise<void | Failure>;
+  afterModel?(context: HarnessContext, result: Result<ModelResponse, ModelError>): void | Promise<void>;
+  /** Only a completed, non-cancelled run may continue, once per hook name and run id. */
+  beforeStop?(context: HarnessContext, result: HarnessResult):
+    void | { input: Content } | { deliveries: readonly Delivery[] } |
+    Promise<void | { input: Content } | { deliveries: readonly Delivery[] }>;
+  /** After the terminal write; exceptions are observable but cannot change the outcome or skip other hooks. */
+  afterRun?(context: HarnessContext, result: HarnessResult & { seq: number; usage: Usage }): void | Promise<void>;
+}
 
 /**
  * Executes one activation of an agent.

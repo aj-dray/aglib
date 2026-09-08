@@ -43,6 +43,14 @@ function capturing() {
 
 const conversation: readonly Message[] = [{ role: "user", content: "What is the balance?" }];
 
+test("optional tool arguments remain optional on the provider wire", async () => {
+  const { fetch, sent } = capturing();
+  const model = createOpenRouterModel({ apiKey: "k", model: "acme/one", fetch });
+  const parameters = { type: "object", properties: { q: { type: "string" }, limit: { type: "number" } }, required: ["q"], additionalProperties: false } as const;
+  await collect(model.generate({ messages: conversation, tools: [{ name: "search", description: "Find records", parameters }] }));
+  expect(sent[0]!.body["tools"]).toEqual([{ type: "function", function: { name: "search", description: "Find records", parameters, strict: false } }]);
+});
+
 test("effort is spelled the way the endpoint spells it, and never both ways at once", async () => {
   for (const [dialect, expected] of [
     [undefined, { reasoning_effort: "high" }],

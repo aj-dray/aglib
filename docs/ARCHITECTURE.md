@@ -130,7 +130,7 @@ the loop reads the history it was handed, sees the tool call that already had it
 on rather than asking for it again. Only a harness declaring `recovery: "history"` is offered this.
 
 A harness declaring `"none"` **ends** the run it was handed. It commits `run.finished` with a
-`no-recovery` failure for the interrupted activation and fires `agent.finished`, so a parent waiting
+`no-recovery` failure for the interrupted activation and fires `beforeStop`, so a parent waiting
 on that session hears the dead end rather than waiting on it. Refusing without writing is the
 obvious thing and it is wrong: the harness is a property of the session, so nothing else was going
 to continue that activation either, and leaving it open means `interrupted` hands the same session back
@@ -264,7 +264,7 @@ its delivery is a pipe that cannot fail, so a terminal channel is nothing *but* 
 which is why that one looked like it belonged in the package and the others do not.
 
 The answer and the stream are also not the same thing, and only one is a message. `RunResult.output`
-is what `finished` hands to `Delivery.input` — the same `Content`, whether the recipient is a person
+is what `beforeStop` hands to `Delivery.input` — the same `Content`, whether the recipient is a person
 or another session. The stream never becomes one: `cancelled` and `failed` carry no `output` at all,
 so a run can stream a paragraph and produce nothing deliverable. Showing that paragraph is right —
 it is most of what debugging a run is — provided the outcome is stated rather than implied, which is

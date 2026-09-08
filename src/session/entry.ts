@@ -98,6 +98,7 @@ export interface From {
  * field for a value another field determines.
  */
 export type Entry =
+  | { type: "hook.input"; runId: string; hook: string; input: Content }
   | { type: "run.started"; runId: string; input: Content; from?: From }
   | {
       type: "assistant"; runId: string; content: Content;

@@ -1,6 +1,6 @@
 import type { Agent, AgentRun, Arrival, RunAgentOptions, RunResult } from "./agent.js";
 import type { Failure } from "./result.js";
-import type { Update } from "./harness/harness.js";
+import type { HarnessContext, HarnessResult, Update } from "./harness/harness.js";
 import type { Delivery, Store, StoreConflict, StoreError } from "./store/store.js";
 import type { Content } from "./content.js";
 import type { Entry, Stored, Usage } from "./session/entry.js";
@@ -19,6 +19,10 @@ import { createExecutor } from "./tools/execute.js";
  */
 export function runAgent(options: RunAgentOptions): AgentRun {
   // A claim names its own session; a caller sending into a new one names none.
+  const hooks = options.agent.hooks ?? [];
+  if (new Set(hooks.map(hook => hook.name)).size !== hooks.length || hooks.some(hook => !hook.name)) {
+    throw new Error("Lifecycle hook names must be non-empty and unique.");
+  }
   const claim = options.claim;
   const sessionId = claim?.sessionId ?? options.sessionId ?? crypto.randomUUID();
   const controller = new AbortController();
@@ -45,6 +49,8 @@ export function runAgent(options: RunAgentOptions): AgentRun {
     // we own and a loop we do not — and so a run that failed still says what it
     // burned on the way there.
     const usage: Usage = {};
+    let hookContext: HarnessContext | undefined;
+    let result: RunResult | undefined;
 
     try {
       const { agent, store } = options;
@@ -58,7 +64,7 @@ export function runAgent(options: RunAgentOptions): AgentRun {
       // The store's own position, not the last entry's. They agree only while
       // nothing has ever been folded away, and the store is the one that knows.
       const log = createLog(restored?.value.entries ?? [], restored?.value.seq ?? 0);
-      const stopping = (error: Failure): RunResult => ({ status: "failed", error, seq: log.seq, usage });
+      const stopping = (error: Failure): RunResult => (result = { status: "failed", error, seq: log.seq, usage });
 
       // A claim was read at a position. If the session has moved since, this
       // worker lost, and the deliveries it was carrying are still where it
@@ -171,28 +177,6 @@ export function runAgent(options: RunAgentOptions): AgentRun {
         }
       }
 
-      /**
-       * What the agent wants delivered as this run ends.
-       *
-       * A callback that throws must not cost the log its terminal entry: the
-       * run would stay open, and an open run nothing closes is claimed by
-       * `interrupted` every window for ever — the trap the no-recovery path above
-       * exists to close. So the throw is held, the run is ended without the
-       * deliveries, and it is re-thrown once the log is safe.
-       */
-      let reportFailure: unknown;
-      async function reporting(run: {
-        runId: string; outcome: "completed" | "failed" | "cancelled"; output: Content;
-      }): Promise<readonly Delivery[]> {
-        if (!agent.finished) return [];
-        try {
-          return await agent.finished({ sessionId, ...run });
-        } catch (error) {
-          reportFailure = error;
-          return [];
-        }
-      }
-
       // Input that arrived while this activation was running, taken from the
       // front of the queue and committed as part of it. `takePending` removes
       // exactly what was committed, in the same write, so losing the position
@@ -249,12 +233,7 @@ export function runAgent(options: RunAgentOptions): AgentRun {
             message: `The ${agent.harness.id} harness cannot restart from history, so this activation cannot be continued.`,
             retryable: false,
           };
-          // Whoever was waiting on it is told, in the write that ends it. A
-          // parent expecting a child that can now never report is the same dead
-          // end one layer up.
-          const told = await reporting({ runId: interrupted, outcome: "failed", output: "" });
-          await commit([{ type: "run.finished", runId: interrupted, outcome: "failed", error: failure }], told);
-          return stopping(failure);
+          stopped = failure;
         }
       }
 
@@ -288,9 +267,8 @@ export function runAgent(options: RunAgentOptions): AgentRun {
       // handed anything.
       stopped ??= exceeded();
 
-      const outcome = stopped
-        ? { status: "failed" as const, error: stopped }
-        : await agent.harness.run({
+      function makeContext(): HarnessContext {
+        return {
         sessionId, runId,
         instructions: agent.instructions,
         history: () => toMessages({
@@ -305,8 +283,45 @@ export function runAgent(options: RunAgentOptions): AgentRun {
         commit: (entries) => commit(entries),
         ...(store ? { drain } : {}),
         emit: (update) => updates.push(update),
-        signal,
-      });
+        signal, hooks,
+        };
+      }
+
+      async function stoppingHooks(outcome: HarnessResult) {
+        const inputs: Entry[] = [];
+        const outgoing: Delivery[] = [];
+        for (const hook of hooks) {
+          const response = await hook.beforeStop?.(hookContext!, outcome);
+          if (response && "input" in response && outcome.status === "completed" && !signal.aborted && !stopped &&
+              !log.entries.some(entry => entry.type === "hook.input" && entry.runId === runId && entry.hook === hook.name)) {
+            inputs.push({ type: "hook.input", runId, hook: hook.name, input: response.input });
+          }
+          if (response && "deliveries" in response) outgoing.push(...response.deliveries);
+        }
+        return { inputs, deliveries: outgoing };
+      }
+
+      hookContext = makeContext();
+      let outcome: HarnessResult;
+      let outgoing: readonly Delivery[] = [];
+      try {
+        for (const hook of hooks) await hook.beforeRun?.(hookContext);
+        for (;;) {
+          outcome = stopped ? { status: "failed", error: stopped }
+            : signal.aborted ? { status: "cancelled" }
+            : await agent.harness.run(hookContext);
+          if (stopped) outcome = { status: "failed", error: stopped };
+          else if (signal.aborted) outcome = { status: "cancelled" };
+          const ending = await stoppingHooks(outcome);
+          if (!ending.inputs.length) { outgoing = ending.deliveries; break; }
+          await commit(ending.inputs);
+        }
+      } catch (error) {
+        if (error instanceof CommitFailed) throw error;
+        outcome = { status: "failed", error: {
+          code: "hook-or-harness", message: error instanceof Error ? error.message : String(error), retryable: false,
+        } };
+      }
 
       // A harness stopped by the ceiling reports a cancellation, because that is
       // all it saw. The run knows why it was cancelled and says so instead.
@@ -314,29 +329,37 @@ export function runAgent(options: RunAgentOptions): AgentRun {
         ? { status: "failed" as const, error: stopped }
         : outcome;
 
-      const output = settled.status === "completed" ? settled.output : "";
-      const finished = await reporting({ runId, outcome: settled.status, output });
-
       await commit(
         [{
           type: "run.finished", runId,
           outcome: settled.status === "completed" ? "completed" : settled.status === "cancelled" ? "cancelled" : "failed",
           ...(settled.status === "failed" ? { error: settled.error } : {}),
         }],
-        finished,
+        outgoing,
       );
 
       if (settled.status === "completed") {
-        return { status: "completed", output: settled.output, seq: log.seq, usage };
+        return result = { status: "completed", output: settled.output, seq: log.seq, usage };
       }
-      if (settled.status === "cancelled") return { status: "cancelled", seq: log.seq, usage };
+      if (settled.status === "cancelled") return result = { status: "cancelled", seq: log.seq, usage };
       return stopping(settled.error);
     } catch (error) {
       if (error instanceof CommitFailed) {
-        return { status: "failed", error: error.failure, seq: error.seq, usage };
+        return result = { status: "failed", error: error.failure, seq: error.seq, usage };
       }
       throw error;
     } finally {
+      if (hookContext) {
+        const final = result ?? { status: "failed" as const, error: {
+          code: "run-error", message: "The run could not finish.", retryable: false,
+        }, seq: hookContext.entries().at(-1)?.seq ?? 0, usage };
+        for (const hook of hooks) {
+          try { await hook.afterRun?.(hookContext, final); }
+          catch (error) {
+            updates.push({ type: "hook.error", hook: hook.name, message: error instanceof Error ? error.message : String(error) });
+          }
+        }
+      }
       updates.close();
     }
   }
