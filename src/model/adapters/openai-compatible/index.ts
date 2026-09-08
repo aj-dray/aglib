@@ -184,7 +184,7 @@ function encodeContent(content: Message["content"]): unknown {
 
 const encodeTool = (tool: ToolSpec) => ({
   type: "function",
-  function: { name: tool.name, description: tool.description, parameters: tool.parameters },
+  function: { name: tool.name, description: tool.description, parameters: tool.parameters, strict: false },
 });
 
 const decodeFinish = (reason: string): ModelResponse["finishReason"] =>

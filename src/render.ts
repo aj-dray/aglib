@@ -18,7 +18,7 @@
  * that cannot fail, so a terminal channel is *nothing but* this projection.
  *
  * **The answer and the stream are different things, and only one is a message.**
- * `RunResult.output` is what `finished` hands to `Delivery.input`: the same
+ * `RunResult.output` is what `beforeStop` hands to `Delivery.input`: the same
  * `Content`, whether the recipient is a person or another session. The stream
  * is not a message and never becomes one — a `cancelled` or `failed` result has
  * no `output` field at all, so a run can stream a paragraph and produce nothing
@@ -304,6 +304,10 @@ function createRenderer(sink: Sink): Renderer {
   const say = (text: string) => { streamed += text; emit(text); };
 
   const entry = (stored: Stored) => {
+    if (stored.type === "hook.input") {
+      if (debugging) line(dim(`◦ ${stored.hook} · ${oneLine(readable(stored.input), 72)}`));
+      return;
+    }
     if (stored.type === "run.started") {
       // Input with no `from` is what the caller just passed in. Echoing it says
       // everything twice. Input *with* one came from somewhere else — a
@@ -384,6 +388,7 @@ function createRenderer(sink: Sink): Renderer {
 
   return {
     update(next) {
+      if (next.type === "hook.error") { line(`Hook ${next.hook}: ${next.message}`); return; }
       if (next.type === "text.delta") { say(next.text); return; }
       if (next.type === "reasoning.delta") {
         // Reasoning can outweigh the answer several times over, so it is behind

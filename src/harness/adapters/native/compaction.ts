@@ -1,6 +1,9 @@
-import type { Model, Message } from "../../../model/model.js";
+import type { LifecycleHook } from "../../harness.js";
+import { foldedThrough, toMessages } from "../../../session/messages.js";
+import type { Model, Message, ModelError } from "../../../model/model.js";
 import type { Stored } from "../../../session/entry.js";
 import { collect } from "../../../model/model.js";
+import { ok, err, type Result } from "../../../result.js";
 import { textOf } from "../../../content.js";
 
 /**
@@ -66,11 +69,39 @@ export async function summarize(input: {
   messages: readonly Message[];
   prompt?: (messages: readonly Message[]) => string;
   signal?: AbortSignal;
-}): Promise<string | undefined> {
+}): Promise<Result<string, ModelError>> {
   const outcome = await collect(input.model.generate({
     messages: [{ role: "user", content: (input.prompt ?? summaryPrompt)(input.messages) }],
     maxOutputTokens: 2_000,
     ...(input.signal ? { signal: input.signal } : {}),
   }));
-  return outcome.ok ? textOf(outcome.value.message.content) : undefined;
+  if (!outcome.ok) return outcome;
+  const summary = textOf(outcome.value.message.content);
+  return summary ? ok(summary) : err({ code: "failed", message: "Compaction produced no summary.", retryable: false });
+}
+
+
+/** Compact before native model calls. A failed summary ends the run with its provider error. */
+export function createCompactionHook(options: {
+  model: Model;
+  maxInputTokens: number;
+  prompt?: (messages: readonly Message[]) => string;
+}): LifecycleHook {
+  return {
+    name: "compaction",
+    async beforeModel(context) {
+      if (estimateTokens(context.history()) <= options.maxInputTokens) return;
+      const entries = context.entries();
+      const cut = compactionCut(entries);
+      if (cut === undefined || cut <= foldedThrough(entries)) return;
+      const summary = await summarize({
+        model: options.model,
+        messages: toMessages({ instructions: context.instructions, entries: entries.filter(entry => entry.seq <= cut) }),
+        ...(options.prompt ? { prompt: options.prompt } : {}),
+        signal: context.signal,
+      });
+      if (!summary.ok) return summary.error;
+      await context.commit([{ type: "summary", runId: context.runId, content: summary.value, replaces: cut }]);
+    },
+  };
 }

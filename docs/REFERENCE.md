@@ -11,7 +11,7 @@ Every name a consumer can import, by entry point. What each one means belongs to
 
 ### `aglib/harness`
 
-`createNativeHarness` · `Harness` · `HarnessContext` · `HarnessResult` · `NativeHarnessOptions` · `Update`
+`createCompactionHook` · `createNativeHarness` · `Harness` · `HarnessContext` · `HarnessResult` · `LifecycleHook` · `NativeHarnessOptions` · `Update`
 
 ### `aglib/harness/adapters/acp`
 

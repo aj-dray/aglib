@@ -1,7 +1,7 @@
 import type { Content } from "./content.js";
-import type { Harness } from "./harness/harness.js";
+import type { Harness, LifecycleHook } from "./harness/harness.js";
 import type { Decide, Tool } from "./tools/tool.js";
-import type { Delivery, Runnable, Store } from "./store/store.js";
+import type { Runnable, Store } from "./store/store.js";
 import type { Update } from "./harness/harness.js";
 import type { Failure } from "./result.js";
 import type { From, Usage } from "./session/entry.js";
@@ -28,12 +28,8 @@ export interface Agent {
    * wrote.
    */
   attribution?: boolean;
-  /** Runs once as an activation ends, whatever ended it; its deliveries commit with the final entries. */
-  finished?(run: {
-    sessionId: string; runId: string;
-    outcome: "completed" | "failed" | "cancelled";
-    output: Content;
-  }): readonly Delivery[] | Promise<readonly Delivery[]>;
+  /** Ordered, uniquely named lifecycle callbacks. Continuations share this run's durable log. */
+  hooks?: readonly LifecycleHook[];
   /**
    * Ceilings on one activation, over the facts this library holds: turns and
    * tool calls are on the log, and a deadline is the clock.

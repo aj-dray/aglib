@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 import { z } from "zod";
 import { runAgent } from "./run.js";
 import { defineTool } from "./tools/tool.js";
+import { createCompactionHook } from "./harness/adapters/native/compaction.js";
 import { createNativeHarness } from "./harness/adapters/native/loop.js";
 import { createFakeModel } from "./model/adapters/fake/index.js";
 import { createSqliteStore } from "./store/adapters/sqlite.js";
@@ -322,7 +323,7 @@ test("a run that keeps calling tools folds without waiting to end", async () => 
   const result = await runAgent({
     agent: agentWith(model, {
       tools: [bulky],
-      harness: createNativeHarness({ model, compaction: { maxInputTokens: 2_000, model: summariser } }),
+      hooks: [createCompactionHook({ maxInputTokens: 2_000, model: summariser })],
     }),
     store, sessionId: "s", input: "audit the ledger",
   }).result;
@@ -521,7 +522,7 @@ test("a harness that cannot restart from history ends the run rather than leavin
   const result = await runAgent({
     agent: {
       ...agentWith(createFakeModel([])), harness: forgetful,
-      finished: ({ outcome }) => [{ sessionId: "opener", input: `child ${outcome}`, from: { kind: "session", id: "s" } }],
+      hooks: [{ name: "report", beforeStop: (_, result) => ({ deliveries: [{ sessionId: "opener", input: `child ${result.status}`, from: { kind: "session", id: "s" } }] }) }],
     },
     store, claim: found.value,
   }).result;
