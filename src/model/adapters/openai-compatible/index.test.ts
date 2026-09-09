@@ -106,3 +106,44 @@ test("usage is asked for on the stream, because it arrives on a frame of its own
   // wire reports nothing — which the port permits, so nothing else would say so.
   expect(sent[0]!.body["stream_options"]).toEqual({ include_usage: true });
 });
+
+test("tool images reach the model after all parallel replies with their call association", async () => {
+  const { fetch, sent } = capturing();
+  const model = createOpenRouterModel({ apiKey: "k", model: "acme/one", fetch });
+  await collect(model.generate({ messages: [
+    { role: "assistant", content: "", calls: [
+      { callId: "image-only", name: "read", arguments: "{}" },
+      { callId: "mixed", name: "read", arguments: "{}" },
+    ] },
+    { role: "tool", callId: "image-only", content: [
+      { type: "image", mediaType: "image/png", source: { kind: "inline", data: "cGl4ZWw=" } },
+    ] },
+    { role: "tool", callId: "mixed", content: [
+      { type: "text", text: "second screenshot" },
+      { type: "image", mediaType: "image/jpeg", source: { kind: "url", url: "https://example.test/screen.jpg" } },
+    ] },
+    { role: "assistant", content: "I can see both screens." },
+  ] }));
+  const messages = sent[0]!.body["messages"] as Record<string, unknown>[];
+  expect(messages.slice(1)).toEqual([
+    { role: "tool", tool_call_id: "image-only", content: "" },
+    { role: "tool", tool_call_id: "mixed", content: "second screenshot" },
+    { role: "user", content: [
+      { type: "text", text: "Images from tool call image-only:" },
+      { type: "image_url", image_url: { url: "data:image/png;base64,cGl4ZWw=" } },
+      { type: "text", text: "Images from tool call mixed:" },
+      { type: "image_url", image_url: { url: "https://example.test/screen.jpg" } },
+    ] },
+    { role: "assistant", content: "I can see both screens." },
+  ]);
+  // The usual next generation ends at a tool reply, without an assistant yet.
+  const { fetch: lastFetch, sent: lastSent } = capturing();
+  await collect(createOpenRouterModel({ apiKey: "k", model: "acme/one", fetch: lastFetch }).generate({ messages: [
+    { role: "assistant", content: "", calls: [{ callId: "last", name: "read", arguments: "{}" }] },
+    { role: "tool", callId: "last", content: [{ type: "image", mediaType: "image/png", source: { kind: "inline", data: "cGl4ZWw=" } }] },
+  ] }));
+  expect((lastSent[0]!.body["messages"] as Record<string, unknown>[]).at(-1)).toMatchObject({ role: "user", content: [
+    { type: "text", text: "Images from tool call last:" },
+    { type: "image_url", image_url: { url: "data:image/png;base64,cGl4ZWw=" } },
+  ] });
+});

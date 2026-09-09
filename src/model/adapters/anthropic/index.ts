@@ -194,7 +194,7 @@ function encodeConversation(messages: readonly Message[], cacheAt = -1): unknown
   messages.forEach((message, index) => {
     if (message.role === "tool") {
       const block = {
-        type: "tool_result", tool_use_id: message.callId, content: textOf(message.content),
+        type: "tool_result", tool_use_id: message.callId, content: typeof message.content === "string" ? message.content : encodeContent(message.content),
         ...(message.isError ? { is_error: true } : {}),
       };
       const last = out.at(-1);
