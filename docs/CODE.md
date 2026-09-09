@@ -82,7 +82,7 @@ caller can act on it, and never inspect error-message text to decide behaviour. 
 programmer errors and violated invariants.
 
 Model-visible output stays separate from structured application, UI and audit detail. A tool result
-carries prose in `content` and everything else in `details`, which never reaches the model.
+carries model-visible text and images in `content` and everything else in `details`, which never reaches the model.
 
 ## Tests
 
@@ -134,18 +134,6 @@ and pushes. Pushing the tag runs `.github/workflows/publish.yml`, which refuses 
 with the manifest, runs the gate again, and publishes through npm's trusted publishing — the
 workflow is the credential, so no token is held anywhere. Pre-1.0, a fix bumps the patch and a changed contract bumps the minor; there are no
 deprecation aliases, so a consumer pins an exact version and moves on purpose.
-
-## Deferred
-
-A deferral points at a real destination or it is a decision nobody made. One is open:
-
-- **A tool result that is not text has nowhere to go on one of the wires.** `ToolResult.content` is
-  `Content`, so the types allow an image, and both wire adapters run it through `textOf` and drop
-  it. The Anthropic `tool_result` block takes the same content union a user message does; a Chat
-  Completions `tool` message takes a string and nothing else. So this is not a conformance case
-  waiting to be written — a case would fail on both — but a decision about where the media goes on
-  a wire that has no slot for it, and whether an adapter that cannot carry it should say so rather
-  than quietly send less than it was given.
 
 ## Comments and documents
 

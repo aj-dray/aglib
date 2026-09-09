@@ -147,3 +147,29 @@ test("cache writes are counted apart from the tokens that were read back", async
     });
   }
 });
+
+test("tool-result images and text reach the provider inside their matching parallel results", async () => {
+  const { model, sent } = capturing();
+  await collect(model.generate({ messages: [
+    { role: "assistant", content: "", calls: [
+      { callId: "image-only", name: "read", arguments: "{}" },
+      { callId: "mixed", name: "read", arguments: "{}" },
+    ] },
+    { role: "tool", callId: "image-only", content: [
+      { type: "image", mediaType: "image/png", source: { kind: "inline", data: "cGl4ZWw=" } },
+    ] },
+    { role: "tool", callId: "mixed", content: [
+      { type: "text", text: "second screenshot" },
+      { type: "image", mediaType: "image/jpeg", source: { kind: "url", url: "https://example.test/screen.jpg" } },
+    ] },
+  ] }));
+  expect((sent[0]!["messages"] as unknown[]).at(-1)).toEqual({ role: "user", content: [
+    { type: "tool_result", tool_use_id: "image-only", content: [
+      { type: "image", source: { type: "base64", media_type: "image/png", data: "cGl4ZWw=" } },
+    ] },
+    { type: "tool_result", tool_use_id: "mixed", content: [
+      { type: "text", text: "second screenshot" },
+      { type: "image", source: { type: "url", url: "https://example.test/screen.jpg" } },
+    ] },
+  ] });
+});

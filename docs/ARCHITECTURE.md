@@ -217,6 +217,12 @@ What stays out is a table and a ceiling. Published rates move faster than any re
 
 It is policy as well as arithmetic. The two applications that wanted a spend limit wanted it to stop at different moments — one refusing the next provider call, the other abandoning the batch the turn had asked for — and an abstraction whose first parameter is that disagreement is one that should not exist yet.
 
+Tool-result images reach the provider alongside their associated result text. Anthropic carries
+these blocks inside `tool_result.content`. Chat Completions only accepts text in a tool message,
+so its adapter emits the images in a following user message labeled with each tool-call id,
+after all contiguous tool replies. This keeps parallel tool-call replies together and preserves
+image order without changing the durable conversation.
+
 ## What an adapter must prove
 
 Three of the four ports ship a conformance suite: `aglib/model/conformance`,

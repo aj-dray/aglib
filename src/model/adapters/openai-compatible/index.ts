@@ -41,7 +41,7 @@ export function createOpenAiCompatibleModel(options: OpenAiCompatibleOptions): M
           },
           body: JSON.stringify({
             model: options.model,
-            messages: request.messages.map(encodeMessage),
+            messages: encodeConversation(request.messages),
             ...(request.tools?.length ? { tools: request.tools.map(encodeTool) } : {}),
             ...(request.maxOutputTokens !== undefined ? { max_tokens: request.maxOutputTokens } : {}),
             ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
@@ -143,6 +143,27 @@ function encodeEffort(
 ): Record<string, unknown> {
   if (!effort || parameter === "none") return {};
   return parameter === "reasoning" ? { reasoning: { effort } } : { reasoning_effort: effort };
+}
+
+function encodeConversation(messages: readonly Message[]): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = [];
+  let images: ContentPart[] = [];
+  const flush = () => {
+    if (images.length) out.push({ role: "user", content: encodeContent(images) });
+    images = [];
+  };
+  for (const message of messages) {
+    // The wire accepts only text in tool replies. Keep every reply in a parallel
+    // batch adjacent before supplying its images as associated user content.
+    if (message.role !== "tool") flush();
+    out.push(encodeMessage(message));
+    if (message.role === "tool" && typeof message.content !== "string") {
+      const media = message.content.filter((part) => part.type === "image");
+      if (media.length) images.push({ type: "text", text: `Images from tool call ${message.callId}:` }, ...media);
+    }
+  }
+  flush();
+  return out;
 }
 
 function encodeMessage(message: Message): Record<string, unknown> {
