@@ -8,7 +8,17 @@ import { textOf } from "../../../content.js";
 
 /** A fallback estimate; provider usage anchors the next request when available. */
 export function estimateTokens(messages: readonly Message[]): number {
-  return messages.reduce((total, message) => total + JSON.stringify(message).length, 0) / 4;
+  return messages.reduce((total, message) => {
+    let imageTokens = 0;
+    const content = typeof message.content === "string" ? message.content : message.content.map(part => {
+      if (part.type !== "image") return part;
+      // Encoded bytes are not text tokens. Without dimensions or a provider's
+      // image tariff, reserve a generous allowance; observed usage still wins.
+      imageTokens += 8192;
+      return { type: part.type, mediaType: part.mediaType };
+    });
+    return total + imageTokens + JSON.stringify({ ...message, content }).length / 4;
+  }, 0);
 }
 
 /** Recent context measured in tokens, with every tool batch kept on one side. */

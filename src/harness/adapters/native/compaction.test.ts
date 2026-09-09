@@ -212,3 +212,18 @@ test("provider input usage triggers compaction then resets after the checkpoint"
   expect(await hook.beforeModel!(context)).toBeUndefined();
   expect(captured.requests).toHaveLength(1);
 });
+
+test("a large screenshot reaches the next model turn intact instead of being compacted as base64 text", async () => {
+  const captured = recording(createFakeModel([{ text: "should not summarize" }]));
+  const image = { type: "image", mediaType: "image/png", source: { kind: "inline", data: "AAAA".repeat(1_000_000) } } as const;
+  const context = contextFor(log(
+    { type: "run.started", runId: "r", input: "Look at this screen and click its link." },
+    { type: "assistant", runId: "r", content: "", calls: [{ callId: "screen", name: "read", arguments: "{}" }], usage: { inputTokens: 4000 } },
+    { type: "tool.finished", runId: "r", callId: "screen", result: { content: [image] } },
+  ));
+  const hook = createCompactionHook({ maxInputTokens: 100_000, model: captured.model });
+  expect(await hook.beforeModel!(context)).toBeUndefined();
+  expect(captured.requests).toHaveLength(0);
+  expect(context.entries().some(entry => entry.type === "summary")).toBe(false);
+  expect(context.history().at(-1)).toMatchObject({ role: "tool", callId: "screen", content: [image] });
+});
