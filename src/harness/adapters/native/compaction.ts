@@ -8,7 +8,17 @@ import { textOf } from "../../../content.js";
 
 /** A fallback estimate; provider usage anchors the next request when available. */
 export function estimateTokens(messages: readonly Message[]): number {
-  return messages.reduce((total, message) => total + JSON.stringify(message).length, 0) / 4;
+  return messages.reduce((total, message) => {
+    let imageTokens = 0;
+    const content = typeof message.content === "string" ? message.content : message.content.map(part => {
+      if (part.type !== "image") return part;
+      // Encoded bytes are not text tokens. Without dimensions or a provider's
+      // image tariff, reserve a generous allowance; observed usage still wins.
+      imageTokens += 8192;
+      return { type: part.type, mediaType: part.mediaType };
+    });
+    return total + imageTokens + JSON.stringify({ ...message, content }).length / 4;
+  }, 0);
 }
 
 /** Recent context measured in tokens, with every tool batch kept on one side. */
@@ -26,14 +36,25 @@ export function compactionCut(entries: readonly Stored[], keepTokens = 20_000): 
   });
   const target = tokens.reduce((sum, count) => sum + count, 0) - keepTokens;
   if (target <= 0) return;
+  const lastAssistant = active.findLast(entry => entry.type === "assistant");
+  const unseenImages = lastAssistant && active.some(entry => entry.seq > lastAssistant.seq
+    && entry.type === "tool.finished" && typeof entry.result.content !== "string"
+    && entry.result.content.some(part => part.type === "image"));
   const awaiting = new Set<string>();
+  let lastSafe: number | undefined;
   let consumed = 0;
   for (const [index, entry] of active.entries()) {
+    // A text checkpoint cannot describe images the agent has not seen yet.
+    // Keep their entire call batch even when it exceeds the retention target.
+    if (unseenImages && entry.seq >= lastAssistant.seq) return lastSafe;
     consumed += tokens[index]!;
     if (entry.type === "assistant") for (const call of entry.calls ?? []) awaiting.add(call.callId);
     if (entry.type === "tool.finished") awaiting.delete(entry.callId);
     if (entry.type === "run.finished") awaiting.clear();
-    if (consumed >= target && !awaiting.size) return entry.seq;
+    if (!awaiting.size) {
+      lastSafe = entry.seq;
+      if (consumed >= target) return entry.seq;
+    }
   }
 }
 
