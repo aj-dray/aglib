@@ -227,3 +227,19 @@ test("a large screenshot reaches the next model turn intact instead of being com
   expect(context.entries().some(entry => entry.type === "summary")).toBe(false);
   expect(context.history().at(-1)).toMatchObject({ role: "tool", callId: "screen", content: [image] });
 });
+
+test("compacting older history retains the entire unseen screenshot batch even above the retention target", async () => {
+  const image = { type: "image", mediaType: "image/png", source: { kind: "inline", data: "AAAA".repeat(100_000) } } as const;
+  const calls = ["a", "b", "c"].map(callId => ({ callId, name: "read", arguments: "{}" }));
+  const context = contextFor(log(
+    { type: "run.started", runId: "r", input: "Inspect three screens." },
+    { type: "assistant", runId: "r", content: "", calls: [{ callId: "old", name: "read", arguments: "{}" }] },
+    { type: "tool.finished", runId: "r", callId: "old", result: { content: "old evidence ".repeat(40_000) } },
+    { type: "assistant", runId: "r", content: "", calls },
+    ...calls.map(call => ({ type: "tool.finished" as const, runId: "r", callId: call.callId, result: { content: [image] } })),
+  ));
+  const hook = createCompactionHook({ maxInputTokens: 100_000, model: createFakeModel([{ text: "Earlier evidence read; inspect the new screenshots." }]) });
+  expect(await hook.beforeModel!(context)).toBeUndefined();
+  expect(context.entries().at(-1)).toMatchObject({ type: "summary", replaces: 3 });
+  expect(context.history().slice(-3)).toEqual(calls.map(call => ({ role: "tool", callId: call.callId, content: [image] })));
+});
