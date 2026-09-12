@@ -2,8 +2,9 @@
 
 ## Organization
 
-One package. Folders and subpath exports are the boundaries; a companion package waits until a
-vendor dependency or an independent release cadence forces the split.
+One package. Folders and subpath exports are the boundaries. A vendor SDK used by one optional
+adapter is an optional peer installed by that adapter's consumer, so the core install remains
+vendor-free; a companion package waits until an independent release cadence forces the split.
 
 ```text
 src/

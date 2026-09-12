@@ -19,7 +19,6 @@ export function createExecutor(input: {
   decide?: Decide;
   sessionId: string;
   runId: string;
-  enqueue(delivery: Delivery): void;
   report(callId: string, data: JsonValue): void;
   /** Adjacent read-only calls run together; this caps how many at once. */
   maxConcurrency?: number;
@@ -35,18 +34,18 @@ export function createExecutor(input: {
 
   return {
     list,
-    async execute({ calls, signal }) {
+    async *execute({ calls, signal }) {
       interface Planned {
         callId: string;
         concurrent: boolean;
-        run(): Promise<ToolResult>;
+        run(): Promise<{ result: ToolResult; deliveries: readonly Delivery[] }>;
       }
       const planned: Planned[] = [];
       const seen = new Set<string>();
 
       for (const call of calls) {
         const settled = (result: ToolResult): Planned =>
-          ({ callId: call.callId, concurrent: true, run: async () => result });
+          ({ callId: call.callId, concurrent: true, run: async () => ({ result, deliveries: [] }) });
 
         if (seen.has(call.callId)) { planned.push(settled(failed(`call id '${call.callId}' was reused`))); continue; }
         seen.add(call.callId);
@@ -75,31 +74,35 @@ export function createExecutor(input: {
           continue;
         }
 
-        const context: ToolContext = {
-          sessionId: input.sessionId, runId: input.runId, callId: call.callId,
-          signal: signal ?? new AbortController().signal,
-          // Stamped here, and deliberately not taken from the caller: this is
-          // the one place that knows the sender without being told.
-          enqueue: (delivery) => input.enqueue({ ...delivery, from: { kind: "session", id: input.sessionId } }),
-          report: (data) => input.report(call.callId, data),
-        };
         const annotations = tool.spec.annotations;
         planned.push({
           callId: call.callId,
           concurrent: annotations?.readOnly === true && annotations.sequential !== true,
           run: async () => {
-            try { return await prepared.value.run(context); }
-            catch (error) { return failed(error instanceof Error ? error.message : String(error)); }
+            const deliveries: Delivery[] = [];
+            const context: ToolContext = {
+              sessionId: input.sessionId, runId: input.runId, callId: call.callId,
+              signal: signal ?? new AbortController().signal,
+              // Stamped here, and deliberately not taken from the caller: this
+              // is the one place that knows the sender without being told.
+              enqueue: (delivery) => deliveries.push({
+                ...delivery, from: { kind: "session", id: input.sessionId },
+              }),
+              report: (data) => input.report(call.callId, data),
+            };
+            try { return { result: await prepared.value.run(context), deliveries }; }
+            catch (error) {
+              return { result: failed(error instanceof Error ? error.message : String(error)), deliveries };
+            }
           },
         });
       }
 
-      const results: { callId: string; result: ToolResult }[] = [];
       let index = 0;
       while (index < planned.length) {
         if (signal?.aborted) {
           for (const item of planned.slice(index)) {
-            results.push({ callId: item.callId, result: failed("Tool use cancelled") });
+            yield { callId: item.callId, result: failed("Tool use cancelled"), deliveries: [] };
           }
           break;
         }
@@ -108,11 +111,14 @@ export function createExecutor(input: {
           while (end < planned.length && planned[end]!.concurrent && end - index < limit) end += 1;
         }
         const segment = planned.slice(index, end);
-        const settled = await Promise.all(segment.map((item) => item.run()));
-        segment.forEach((item, offset) => results.push({ callId: item.callId, result: settled[offset]! }));
+        const running = segment.map(async (item) => ({ item, completion: await item.run() }));
+        while (running.length) {
+          const settled = await Promise.race(running.map(async (promise, offset) => ({ offset, value: await promise })));
+          running.splice(settled.offset, 1);
+          yield { callId: settled.value.item.callId, ...settled.value.completion };
+        }
         index = end;
       }
-      return { results };
     },
   };
 }

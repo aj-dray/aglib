@@ -70,7 +70,11 @@ export function toMessages(input: {
   // would make the session permanently unusable. What is said is what is known
   // — the call did not report back — and never an invented result.
   const answered = new Set(
-    input.entries.filter((entry) => entry.type === "tool.finished").map((entry) => entry.callId),
+    input.entries.filter((entry) => entry.type === "tool.finished")
+      .map((entry) => `${entry.runId}\u0000${entry.callId}`),
+  );
+  const closed = new Set(
+    input.entries.filter((entry) => entry.type === "run.finished").map((entry) => entry.runId),
   );
 
   for (const entry of input.entries) {
@@ -95,7 +99,7 @@ export function toMessages(input: {
           ...(entry.providerState ? { providerState: entry.providerState } : {}),
         });
         for (const call of entry.calls ?? []) {
-          if (answered.has(call.callId)) continue;
+          if (answered.has(`${entry.runId}\u0000${call.callId}`) || !closed.has(entry.runId)) continue;
           messages.push({
             role: "tool", callId: call.callId, isError: true,
             content: "This call did not report back: the activation ended before its result was committed.",

@@ -1,3 +1,4 @@
 export type {
-  Message, Model, ModelDelta, ModelError, ModelRequest, ModelResponse, ProviderState, ToolSpec,
+  Message, Model, ModelDelta, ModelError, ModelGeneration, ModelRequest, ModelResponse,
+  ModelSteerResult, ProviderState, ToolSpec,
 } from "./model.js";

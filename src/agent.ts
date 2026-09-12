@@ -86,7 +86,7 @@ interface RunAgentBase {
   agent: Agent;
   /** Opaque application index key, used only when this run creates the session. */
   key?: string;
-  context?: { run?: string; turn?: string };
+  context?: { run?: string; turn?: string | (() => string) };
   signal?: AbortSignal;
 }
 

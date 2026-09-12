@@ -59,6 +59,10 @@
       "types": "./dist/model/adapters/openai-compatible/index.d.ts",
       "import": "./dist/model/adapters/openai-compatible/index.js"
     },
+    "./model/adapters/openai-responses": {
+      "types": "./dist/model/adapters/openai-responses/index.d.ts",
+      "import": "./dist/model/adapters/openai-responses/index.js"
+    },
     "./model/adapters/fake": {
       "types": "./dist/model/adapters/fake/index.d.ts",
       "import": "./dist/model/adapters/fake/index.js"
@@ -103,7 +107,22 @@
   "dependencies": {
     "zod": "^4.4.3"
   },
+  "peerDependencies": {
+    "openai": "^7.10.0",
+    "ws": "^8.18.0"
+  },
+  "peerDependenciesMeta": {
+    "openai": {
+      "optional": true
+    },
+    "ws": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "openai": "^7.10.0",
+    "ws": "^8.18.0",
+    "@types/ws": "^8.18.1",
     "@types/bun": "^1.3.14",
     "typescript": "^6.0.3"
   },

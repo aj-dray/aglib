@@ -19,7 +19,7 @@ Every name a consumer can import, by entry point. What each one means belongs to
 
 ### `aglib/model`
 
-`Message` · `Model` · `ModelDelta` · `ModelError` · `ModelRequest` · `ModelResponse` · `ProviderState` · `ToolSpec`
+`Message` · `Model` · `ModelDelta` · `ModelError` · `ModelGeneration` · `ModelRequest` · `ModelResponse` · `ModelSteerResult` · `ProviderState` · `ToolSpec`
 
 ### `aglib/model/adapters/anthropic`
 
@@ -32,6 +32,10 @@ Every name a consumer can import, by entry point. What each one means belongs to
 ### `aglib/model/adapters/openai-compatible`
 
 `createOpenAiCompatibleModel` · `createOpenRouterModel` · `OpenAiCompatibleOptions`
+
+### `aglib/model/adapters/openai-responses`
+
+`createOpenAiResponsesModel` · `OpenAiResponsesConnection` · `OpenAiResponsesModel` · `OpenAiResponsesOptions`
 
 ### `aglib/model/conformance`
 

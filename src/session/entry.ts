@@ -7,6 +7,8 @@ export interface ToolCall {
   callId: string;
   name: string;
   arguments: string;
+  /** The model may continue before this call reports its result. */
+  async?: boolean;
 }
 
 /** Provider-owned continuation data, retained verbatim beside the output that produced it. */
@@ -116,7 +118,7 @@ export type Entry =
        * different fact and not a substitute — anything projecting a generation
        * needs both ends of the call, and the commit is neither of them.
        */
-      generation?: { model?: string; startedAt: string; endedAt: string };
+      generation?: { id: string; model?: string; startedAt: string; endedAt?: string };
     }
   | { type: "tool.started"; runId: string; callId: string }
   | { type: "tool.finished"; runId: string; callId: string; result: ToolResult }

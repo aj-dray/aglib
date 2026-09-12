@@ -4,6 +4,8 @@
   "type": "module",
   "dependencies": {
     "aglib": "file:../..",
+    "openai": "^7.10.0",
+    "ws": "^8.18.0",
     "zod": "^4.4.3"
   }
 }
