@@ -1,11 +1,11 @@
 import type { Content } from "../content.js";
-import type { From, Stored, ToolCall } from "./entry.js";
+import type { From, ProviderState, Stored, ToolCall } from "./entry.js";
 
 /** A message as a provider takes it: built per turn from the log, never held. */
 export type Message =
   | { role: "system"; content: Content }
   | { role: "user"; content: Content }
-  | { role: "assistant"; content: Content; calls?: readonly ToolCall[] }
+  | { role: "assistant"; content: Content; calls?: readonly ToolCall[]; providerState?: ProviderState }
   | { role: "tool"; callId: string; content: Content; isError?: boolean };
 
 /**
@@ -92,6 +92,7 @@ export function toMessages(input: {
           role: "assistant",
           content: entry.content,
           ...(entry.calls?.length ? { calls: entry.calls } : {}),
+          ...(entry.providerState ? { providerState: entry.providerState } : {}),
         });
         for (const call of entry.calls ?? []) {
           if (answered.has(call.callId)) continue;

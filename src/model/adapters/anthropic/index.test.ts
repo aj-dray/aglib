@@ -148,6 +148,53 @@ test("cache writes are counted apart from the tokens that were read back", async
   }
 });
 
+test("signed and redacted thinking blocks survive streaming and a tool continuation unchanged", async () => {
+  const { model } = capturing(() => sse(
+    { type: "message_start", message: { model: "claude-opus-5", usage: { input_tokens: 10 } } },
+    { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "", signature: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "private " } },
+    { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "thought" } },
+    { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "sig-" } },
+    { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "nature" } },
+    { type: "content_block_stop", index: 0 },
+    { type: "content_block_start", index: 1, content_block: { type: "redacted_thinking", data: "cipher" } },
+    { type: "content_block_stop", index: 1 },
+    { type: "content_block_start", index: 2, content_block: { type: "tool_use", id: "call-1", name: "read", input: {} } },
+    { type: "content_block_delta", index: 2, delta: { type: "input_json_delta", partial_json: "{\"account\":" } },
+    { type: "content_block_delta", index: 2, delta: { type: "input_json_delta", partial_json: "\"main\"}" } },
+    { type: "content_block_stop", index: 2 },
+    { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 20 } },
+  ));
+  const first = await collect(model.generate({ messages: conversation, effort: "high" }));
+  expect(first.ok).toBe(true);
+  if (!first.ok) return;
+  expect(first.value.message.content).toBe("");
+  expect(first.value.providerState?.items).toEqual([
+    { type: "thinking", thinking: "private thought", signature: "sig-nature" },
+    { type: "redacted_thinking", data: "cipher" },
+    { type: "tool_use", id: "call-1", name: "read", input: { account: "main" } },
+  ]);
+
+  const continuation = capturing();
+  await collect(continuation.model.generate({ messages: [
+    { role: "assistant", ...first.value.message, providerState: first.value.providerState },
+    { role: "tool", callId: "call-1", content: "1250" },
+  ] }));
+  expect((continuation.sent[0]!["messages"] as { content: unknown[] }[])[0]!.content).toEqual(
+    first.value.providerState?.items,
+  );
+
+  const isolated = capturing();
+  await collect(isolated.model.generate({ messages: [{
+    role: "assistant", content: "safe", calls: [{ callId: "call-1", name: "read", arguments: "{}" }],
+    providerState: { provider: "anthropic-messages:another-model", items: [{ type: "redacted_thinking", data: "hidden" }] },
+  }] }));
+  expect((isolated.sent[0]!["messages"] as { content: unknown[] }[])[0]!.content).toEqual([
+    { type: "text", text: "safe" },
+    { type: "tool_use", id: "call-1", name: "read", input: {} },
+  ]);
+});
+
 test("tool-result images and text reach the provider inside their matching parallel results", async () => {
   const { model, sent } = capturing();
   await collect(model.generate({ messages: [

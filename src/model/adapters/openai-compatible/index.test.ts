@@ -28,6 +28,17 @@ const answered = (): ReadableStream<Uint8Array> => {
   });
 };
 
+const streamed = (...frames: unknown[]): ReadableStream<Uint8Array> => {
+  const encoder = new TextEncoder();
+  return new ReadableStream({
+    start(controller) {
+      for (const frame of frames) controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n`));
+      controller.enqueue(encoder.encode("data: [DONE]\n"));
+      controller.close();
+    },
+  });
+};
+
 function capturing() {
   const sent: { url: string; headers: Record<string, string>; body: Record<string, unknown> }[] = [];
   const fetch = (async (url: string, init: RequestInit) => {
@@ -105,6 +116,133 @@ test("usage is asked for on the stream, because it arrives on a frame of its own
   // Without this the counts never arrive at all, and every generation on this
   // wire reports nothing — which the port permits, so nothing else would say so.
   expect(sent[0]!.body["stream_options"]).toEqual({ include_usage: true });
+});
+
+test("reasoning state is rebuilt from stream fragments and replayed only on its own wire", async () => {
+  const sent: Record<string, unknown>[] = [];
+  const responses = [streamed(
+    { choices: [{ delta: { reasoning: "plain " } }] },
+    { choices: [{ delta: { reasoning: "thought", reasoning_details: [
+      { type: "reasoning.summary", summary: "sum ", id: "sum-1", format: "openai-responses-v1", index: 0 },
+    ] } }] },
+    { choices: [{ delta: { reasoning_details: [
+      { type: "reasoning.summary", summary: "mary", id: "sum-1", format: "openai-responses-v1", index: 0 },
+      { type: "reasoning.summary", summary: "second", format: "openai-responses-v1", index: 1 },
+      { type: "reasoning.text", text: "signed ", signature: null, id: "text-1", format: "anthropic-claude-v1", index: 0 },
+    ] } }] },
+    { choices: [{ delta: { reasoning_details: [
+      { type: "reasoning.text", text: "thought", signature: "sig-1", id: "text-1", format: "anthropic-claude-v1", index: 0 },
+      { type: "reasoning.encrypted", data: "cipher", id: "enc-1", format: "openai-responses-v1", index: 0 },
+    ] } }] },
+    { choices: [{ delta: { reasoning_content: "alias" } }] },
+    { choices: [{ finish_reason: "tool_calls", delta: { tool_calls: [
+      { index: 0, id: "call-1", function: { name: "read", arguments: "{}" } },
+    ] } }] },
+  ), answered()];
+  const fetch = (async (_url: string, init: RequestInit) => {
+    sent.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+    return new Response(responses.shift()!, { status: 200 });
+  }) as unknown as typeof globalThis.fetch;
+  const model = createOpenRouterModel({ apiKey: "k", model: "acme/one", fetch });
+
+  const deltas: string[] = [];
+  const generation = model.generate({ messages: conversation });
+  let step = await generation.next();
+  while (!step.done) {
+    if (step.value.type === "reasoning.delta") deltas.push(step.value.text);
+    step = await generation.next();
+  }
+  expect(step.value.ok).toBe(true);
+  if (!step.value.ok) return;
+  const first = step.value.value;
+  expect(first.message.content).toBe("");
+  expect(deltas).toEqual(["plain ", "thought", "alias"]);
+  expect(first.providerState).toEqual({
+    provider: "openai-compatible:https://openrouter.ai/api/v1",
+    items: [{
+      reasoning_details: [
+        { type: "reasoning.summary", summary: "sum mary", id: "sum-1", format: "openai-responses-v1", index: 0 },
+        { type: "reasoning.summary", summary: "second", format: "openai-responses-v1", index: 1 },
+        { type: "reasoning.text", text: "signed thought", signature: "sig-1", id: "text-1", format: "anthropic-claude-v1", index: 0 },
+        { type: "reasoning.encrypted", data: "cipher", id: "enc-1", format: "openai-responses-v1", index: 0 },
+      ],
+    }],
+  });
+
+  await collect(model.generate({ messages: [
+    { role: "assistant", ...first.message, providerState: first.providerState },
+    { role: "tool", callId: "call-1", content: "1250" },
+  ] }));
+  const replay = (sent[1]!["messages"] as Record<string, unknown>[])[0]!;
+  expect(replay).toMatchObject(first.providerState!.items[0]!);
+  expect(replay["content"]).toBeNull();
+
+  const foreign = capturing();
+  await collect(createOpenRouterModel({ apiKey: "k", model: "acme/one", fetch: foreign.fetch }).generate({
+    messages: [{
+      role: "assistant", content: "safe",
+      providerState: { provider: "anthropic-messages:elsewhere", items: [{ reasoning: "private" }] },
+    }],
+  }));
+  expect((foreign.sent[0]!.body["messages"] as Record<string, unknown>[])[0]).toEqual({
+    role: "assistant", content: "safe",
+  });
+});
+
+test("plain reasoning aliases are preserved when the provider has no structured blocks", async () => {
+  const sent: Record<string, unknown>[] = [];
+  const responses = [
+    streamed(
+      { choices: [{ delta: { reasoning_content: "private " } }] },
+      { choices: [{ finish_reason: "tool_calls", delta: {
+        reasoning_content: "thought",
+        tool_calls: [{ index: 0, id: "call-1", function: { name: "read", arguments: "{}" } }],
+      } }] },
+    ),
+    answered(),
+  ];
+  const fetch = (async (_url: string, init: RequestInit) => {
+    sent.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+    return new Response(responses.shift()!, { status: 200 });
+  }) as unknown as typeof globalThis.fetch;
+  const model = createOpenRouterModel({ apiKey: "k", model: "acme/one", fetch });
+  const first = await collect(model.generate({ messages: conversation }));
+  expect(first.ok).toBe(true);
+  if (!first.ok) return;
+  expect(first.value.providerState?.items).toEqual([{ reasoning_content: "private thought" }]);
+
+  await collect(model.generate({ messages: [
+    { role: "assistant", ...first.value.message, providerState: first.value.providerState },
+    { role: "tool", callId: "call-1", content: "1250" },
+  ] }));
+  expect((sent[1]!["messages"] as Record<string, unknown>[])[0]!["reasoning_content"])
+    .toBe("private thought");
+});
+
+test("an explicitly empty reasoning-details block survives as provider state", async () => {
+  const sent: Record<string, unknown>[] = [];
+  const responses = [
+    streamed({ choices: [{ finish_reason: "tool_calls", delta: {
+      reasoning_details: [],
+      tool_calls: [{ index: 0, id: "call-1", function: { name: "read", arguments: "{}" } }],
+    } }] }),
+    answered(),
+  ];
+  const fetch = (async (_url: string, init: RequestInit) => {
+    sent.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+    return new Response(responses.shift()!, { status: 200 });
+  }) as unknown as typeof globalThis.fetch;
+  const model = createOpenRouterModel({ apiKey: "k", model: "acme/one", fetch });
+  const first = await collect(model.generate({ messages: conversation }));
+  expect(first.ok).toBe(true);
+  if (!first.ok) return;
+  expect(first.value.providerState?.items).toEqual([{ reasoning_details: [] }]);
+
+  await collect(model.generate({ messages: [
+    { role: "assistant", ...first.value.message, providerState: first.value.providerState },
+    { role: "tool", callId: "call-1", content: "1250" },
+  ] }));
+  expect((sent[1]!["messages"] as Record<string, unknown>[])[0]!["reasoning_details"]).toEqual([]);
 });
 
 test("tool images reach the model after all parallel replies with their call association", async () => {

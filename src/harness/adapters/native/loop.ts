@@ -76,6 +76,7 @@ export function createNativeHarness(options: NativeHarnessOptions): Harness {
           type: "assistant", runId, content: response.message.content,
           ...(calls.length ? { calls } : {}),
           usage: response.usage,
+          ...(response.providerState ? { providerState: response.providerState } : {}),
           generation: { ...(response.model ? { model: response.model } : {}), startedAt, endedAt },
         }]);
 
