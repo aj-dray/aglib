@@ -3,6 +3,7 @@ import type {
 } from "../../model.js";
 import { err, ok, type Result } from "../../../result.js";
 import { textOf } from "../../../content.js";
+import type { JsonValue } from "../../../json.js";
 
 export interface AnthropicOptions {
   apiKey: string;
@@ -40,6 +41,7 @@ export interface AnthropicOptions {
 export function createAnthropicModel(options: AnthropicOptions): Model {
   const call = options.fetch ?? fetch;
   const baseUrl = options.baseUrl ?? "https://api.anthropic.com/v1";
+  const provider = `anthropic-messages:${baseUrl.replace(/\/+$/, "")}:${options.model}`;
 
   return {
     id: `anthropic:${options.model}`,
@@ -74,7 +76,7 @@ export function createAnthropicModel(options: AnthropicOptions): Model {
             model: options.model,
             max_tokens: maxOutputTokens,
             ...(system.length ? { system: encodeSystem(system, cacheSystem) } : {}),
-            messages: encodeConversation(conversation, cacheAt),
+            messages: encodeConversation(conversation, cacheAt, provider),
             ...(request.tools?.length ? { tools: request.tools.map(encodeTool) } : {}),
             ...(request.effort
               ? { thinking: { type: "adaptive" }, output_config: { effort: request.effort } }
@@ -95,6 +97,8 @@ export function createAnthropicModel(options: AnthropicOptions): Model {
       let stop: string | undefined;
       let usage: Usage = {};
       let model: string | undefined;
+      const providerBlocks = new Map<number, Record<string, JsonValue>>();
+      const partialInputs = new Map<number, string>();
 
       // A stream that dies mid-body — cancelled, dropped, truncated — must come
       // back as a typed failure like any other. Without this the generator throws,
@@ -109,16 +113,39 @@ export function createAnthropicModel(options: AnthropicOptions): Model {
             model = frame.message.model;
             usage = { ...usage, ...decodeUsage(frame.message.usage) };
           }
-          if (frame.type === "content_block_start" && frame.content_block?.type === "tool_use") {
-            calls.push({ callId: frame.content_block.id!, name: frame.content_block.name!, arguments: "" });
-            partial = "";
+          if (frame.type === "content_block_start" && frame.content_block) {
+            const index = frame.index ?? providerBlocks.size;
+            providerBlocks.set(index, clone(frame.content_block));
+            if (frame.content_block.type === "tool_use") {
+              calls.push({
+                callId: String(frame.content_block.id ?? `call_${index}`),
+                name: String(frame.content_block.name ?? ""),
+                arguments: "",
+              });
+              partial = "";
+              partialInputs.set(index, "");
+            }
           }
           if (frame.type === "content_block_delta") {
             const delta = frame.delta!;
+            const block = frame.index === undefined ? undefined : providerBlocks.get(frame.index);
             if (delta.type === "text_delta" && delta.text) { text.push(delta.text); yield { type: "text.delta", text: delta.text }; }
             if (delta.type === "thinking_delta" && delta.thinking) yield { type: "reasoning.delta", text: delta.thinking };
+            if (block && delta.type === "text_delta" && delta.text !== undefined) {
+              block["text"] = `${typeof block["text"] === "string" ? block["text"] : ""}${delta.text}`;
+            }
+            if (block && delta.type === "thinking_delta" && delta.thinking !== undefined) {
+              block["thinking"] = `${typeof block["thinking"] === "string" ? block["thinking"] : ""}${delta.thinking}`;
+            }
+            if (block && delta.type === "signature_delta" && delta.signature !== undefined) {
+              block["signature"] = `${typeof block["signature"] === "string" ? block["signature"] : ""}${delta.signature}`;
+            }
             if (delta.type === "input_json_delta" && delta.partial_json !== undefined) {
               partial += delta.partial_json;
+              if (frame.index !== undefined) partialInputs.set(
+                frame.index,
+                `${partialInputs.get(frame.index) ?? ""}${delta.partial_json}`,
+              );
               const current = calls.at(-1);
               if (current) yield { type: "tool-call.delta", callId: current.callId, arguments: delta.partial_json };
             }
@@ -126,6 +153,10 @@ export function createAnthropicModel(options: AnthropicOptions): Model {
           if (frame.type === "content_block_stop" && calls.length) {
             const current = calls.at(-1)!;
             if (!current.arguments) current.arguments = partial || "{}";
+            if (frame.index !== undefined && partialInputs.has(frame.index)) {
+              const block = providerBlocks.get(frame.index);
+              if (block) block["input"] = safeJson(partialInputs.get(frame.index) || "{}");
+            }
           }
           if (frame.type === "message_delta") {
             stop = frame.delta?.stop_reason ?? stop;
@@ -139,11 +170,15 @@ export function createAnthropicModel(options: AnthropicOptions): Model {
         return err(transportError(error, request.signal));
       }
 
+      const providerItems = [...providerBlocks.entries()]
+        .sort(([left], [right]) => left - right)
+        .map(([, block]) => block);
       return ok({
         message: { content: text.join(""), ...(calls.length ? { calls } : {}) },
         finishReason: stop === "max_tokens" ? "length" : stop === "refusal" ? "refusal" : calls.length ? "tool-calls" : "stop",
         usage,
         ...(model ? { model } : {}),
+        ...(providerItems.length ? { providerState: { provider, items: providerItems } } : {}),
       });
     },
   };
@@ -187,7 +222,7 @@ function encodeSystem(blocks: readonly string[], cache: boolean): unknown[] {
  * block, so the mapping from message to block is not one to one and the mark is
  * placed as each message is encoded rather than computed afterwards.
  */
-function encodeConversation(messages: readonly Message[], cacheAt = -1): unknown[] {
+function encodeConversation(messages: readonly Message[], cacheAt: number, provider: string): unknown[] {
   const out: { role: string; content: unknown[] }[] = [];
   let mark: unknown[] | undefined;
 
@@ -201,11 +236,15 @@ function encodeConversation(messages: readonly Message[], cacheAt = -1): unknown
       if (last?.role === "user") last.content.push(block);
       else out.push({ role: "user", content: [block] });
     } else if (message.role === "assistant") {
-      const content: unknown[] = [];
-      const spoken = textOf(message.content);
-      if (spoken) content.push({ type: "text", text: spoken });
-      for (const call of message.calls ?? []) {
-        content.push({ type: "tool_use", id: call.callId, name: call.name, input: safeJson(call.arguments) });
+      const content: unknown[] = message.providerState?.provider === provider && message.providerState.items.length
+        ? message.providerState.items.map(clone)
+        : [];
+      if (!content.length) {
+        const spoken = textOf(message.content);
+        if (spoken) content.push({ type: "text", text: spoken });
+        for (const call of message.calls ?? []) {
+          content.push({ type: "tool_use", id: call.callId, name: call.name, input: safeJson(call.arguments) });
+        }
       }
       out.push({ role: "assistant", content });
     } else if (message.role === "system") {
@@ -242,7 +281,9 @@ const encodeTool = (tool: ToolSpec) => ({
   name: tool.name, description: tool.description, input_schema: tool.parameters,
 });
 
-const safeJson = (raw: string): unknown => { try { return JSON.parse(raw); } catch { return {}; } };
+const safeJson = (raw: string): JsonValue => { try { return JSON.parse(raw) as JsonValue; } catch { return {}; } };
+
+const clone = <T extends JsonValue>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
 const decodeUsage = (usage: AnthropicUsage | undefined): Usage => usage ? {
   ...(usage.input_tokens !== undefined ? { inputTokens: usage.input_tokens } : {}),
@@ -292,9 +333,13 @@ interface AnthropicUsage {
 }
 interface AnthropicFrame {
   type: string;
+  index?: number;
   message?: { model?: string; usage?: AnthropicUsage };
-  content_block?: { type: string; id?: string; name?: string };
-  delta?: { type?: string; text?: string; thinking?: string; partial_json?: string; stop_reason?: string };
+  content_block?: Record<string, JsonValue> & { type: string };
+  delta?: {
+    type?: string; text?: string; thinking?: string; signature?: string;
+    partial_json?: string; stop_reason?: string;
+  };
   usage?: AnthropicUsage;
   error?: { message?: string };
 }

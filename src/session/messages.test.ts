@@ -25,6 +25,17 @@ test("projects a conversation, and places context by lifetime around the cache b
   expect(JSON.stringify(messages)).not.toContain("tool.started");
 });
 
+test("projects provider continuation state beside the assistant turn", () => {
+  const providerState = { provider: "acme-wire", items: [{ signature: "sig-1" }] } as const;
+  const messages = toMessages({
+    instructions: "i",
+    entries: log({ type: "assistant", runId: "r", content: "answer", providerState }),
+  });
+  const assistant = messages.find((message) => message.role === "assistant");
+  expect(assistant?.role === "assistant" && assistant.providerState).toEqual(providerState);
+  expect(assistant?.content).toBe("answer");
+});
+
 test("a summary folds what it replaces without deleting it", () => {
   const entries = log(
     { type: "run.started", runId: "r", input: "first" },

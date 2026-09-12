@@ -13,6 +13,7 @@ export interface ToolCall {
 
 /** Provider-owned continuation data, retained verbatim beside the output that produced it. */
 export interface ProviderState {
+  /** The provider wire allowed to replay these items. */
   provider: string;
   items: readonly JsonValue[];
 }

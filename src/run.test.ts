@@ -10,7 +10,7 @@ import { createSqliteStore } from "./store/adapters/sqlite.js";
 import { textOf } from "./content.js";
 import { ok } from "./result.js";
 import type { Agent } from "./agent.js";
-import type { Message, Model } from "./model/model.js";
+import type { Message, Model, ModelRequest } from "./model/model.js";
 
 const ledger = defineTool({
   name: "read_ledger", description: "read", annotations: { readOnly: true },
@@ -46,6 +46,40 @@ test("a tool round trip is recorded in full, in order", async () => {
   const started = read.value.entries.findIndex((entry) => entry.type === "tool.started");
   const finished = read.value.entries.findIndex((entry) => entry.type === "tool.finished");
   expect(started).toBeLessThan(finished);
+});
+
+test("provider continuation state is committed, reloaded, and kept out of the answer", async () => {
+  const store = createSqliteStore({ database: new Database(":memory:") });
+  const providerState = {
+    provider: "acme-wire",
+    items: [{ type: "reasoning.encrypted", data: "cipher", signature: "sig-1" }],
+  } as const;
+  const requests: ModelRequest[] = [];
+  const fake = createFakeModel([
+    { calls: [call], providerState },
+    { text: "The balance is 1250." },
+  ]);
+  const model: Model = {
+    id: fake.id,
+    generate(request) {
+      requests.push(request);
+      return fake.generate(request);
+    },
+  };
+
+  const result = await runAgent({ agent: agentWith(model), store, sessionId: "s", input: "balance?" }).result;
+  expect(result.status).toBe("completed");
+  if (result.status !== "completed") return;
+  expect(result.output).toBe("The balance is 1250.");
+  expect(JSON.stringify(result.output)).not.toContain("cipher");
+
+  const replayed = requests[1]!.messages.find((message) => message.role === "assistant");
+  expect(replayed?.role === "assistant" && replayed.providerState).toEqual(providerState);
+  const read = await store.read({ sessionId: "s" });
+  if (!read.ok) throw new Error("read failed");
+  const committed = read.value.entries.find((entry) => entry.type === "assistant" && entry.providerState);
+  expect(committed?.type === "assistant" && committed.providerState).toEqual(providerState);
+  expect(committed?.type === "assistant" && committed.content).toBe("");
 });
 
 test("the same agent runs with no store at all", async () => {

@@ -7,7 +7,7 @@ Every name a consumer can import, by entry point. What each one means belongs to
 
 ### `aglib`
 
-`Agent` · `AgentRun` · `Arrival` · `Content` · `ContentPart` · `ContentSource` · `Decide` · `defineTool` · `Delivery` · `Entry` · `err` · `Failure` · `From` · `JsonValue` · `ok` · `Result` · `runAgent` · `RunAgentOptions` · `RunResult` · `Stored` · `textOf` · `Tool` · `ToolCall` · `ToolContext` · `ToolExecutor` · `ToolResult` · `Usage`
+`Agent` · `AgentRun` · `Arrival` · `Content` · `ContentPart` · `ContentSource` · `Decide` · `defineTool` · `Delivery` · `Entry` · `err` · `Failure` · `From` · `JsonValue` · `ok` · `ProviderState` · `Result` · `runAgent` · `RunAgentOptions` · `RunResult` · `Stored` · `textOf` · `Tool` · `ToolCall` · `ToolContext` · `ToolExecutor` · `ToolResult` · `Usage`
 
 ### `aglib/harness`
 

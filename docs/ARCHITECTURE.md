@@ -49,6 +49,16 @@ harness nothing of stores.
 | `sandbox` | Where do commands run? Isolation is requested and either enforced or refused, and a credential is given as a `Secret` whose fate the sandbox reports. |
 | `harness` | How does one activation reason and act? One fact: can it resume from history. |
 
+Some provider responses carry continuation state that must accompany an assistant turn on the next
+request: signed thinking blocks, encrypted reasoning, or another wire-native item. The model adapter
+keeps those values verbatim as `providerState` on the assistant entry, tagged by the provider wire
+that produced them. The projection carries the state beside the message, and only an adapter with
+the matching tag puts it back on its wire. It is neither assistant content nor a reasoning delta, so
+persisting it does not turn private or encrypted reasoning into text a person or another model sees.
+When a wire exposes only plaintext reasoning for continuation, that plaintext is necessarily part
+of the durable state; an application with stricter retention requirements must configure the
+provider not to return it. aglib does not copy it into content or render it as conversation text.
+
 **One fact, not eight.** A caller only ever needs to know whether an interrupted activation can
 restart from the log, and `run.ts` is the consumer — it closes a session no harness can continue
 rather than handing it out for ever. Everything a larger capability matrix carried was optional
