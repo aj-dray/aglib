@@ -16,7 +16,7 @@ import type { JsonValue } from "../json.js";
  */
 export type Update =
   | { type: "hook.error"; hook: string; message: string }
-  | { type: "text.delta"; text: string; runId?: string; generationId?: string }
+  | { type: "text.delta"; text: string; phase?: "commentary" | "final_answer"; runId?: string; generationId?: string }
   | { type: "reasoning.delta"; text: string; runId?: string; generationId?: string }
   | { type: "tool.progress"; callId: string; data: JsonValue }
   /** Arguments arriving a fragment at a time, so a viewer can show a call forming. */

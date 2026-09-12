@@ -149,6 +149,38 @@ test("async calls complete before the response and opaque output is replayed exa
   model.close();
 });
 
+test("output text keeps the phase of its response item", async () => {
+  const wire = new FakeConnection();
+  const model = createOpenAiResponsesModel({ apiKey: "k", model: "gpt-6-astra", connect: () => wire });
+  wire.onSend = (event) => {
+    if (event.type !== "response.create") return;
+    const lane = laneOf(event);
+    wire.message(created(lane, "resp_phase"));
+    wire.message({
+      type: "response.output_item.added", stream_id: lane,
+      item: { type: "message", id: "msg_commentary", role: "assistant", phase: "commentary", content: [] },
+    });
+    wire.message({ type: "response.output_text.delta", stream_id: lane, item_id: "msg_commentary", delta: "Checking. " });
+    wire.message({
+      type: "response.output_item.added", stream_id: lane,
+      item: { type: "message", id: "msg_final", role: "assistant", phase: "final_answer", content: [] },
+    });
+    wire.message({ type: "response.output_text.delta", stream_id: lane, item_id: "msg_final", delta: "Done. " });
+    wire.message({ type: "response.output_text.delta", stream_id: lane, delta: "Unclassified." });
+    wire.message(completed(lane, "resp_phase"));
+  };
+
+  const outcome = await drain(model.generate({ messages: [{ role: "user", content: "answer" }] }));
+
+  expect(outcome.deltas).toEqual([
+    { type: "text.delta", text: "Checking. ", phase: "commentary" },
+    { type: "text.delta", text: "Done. ", phase: "final_answer" },
+    { type: "text.delta", text: "Unclassified." },
+  ]);
+  expect(outcome.result.ok && outcome.result.value.message.content).toBe("Checking. Done. Unclassified.");
+  model.close();
+});
+
 test("a normal client tool call ends the generation and is emitted once", async () => {
   const wire = new FakeConnection();
   const model = createOpenAiResponsesModel({ apiKey: "k", model: "gpt-6-astra", connect: () => wire });
@@ -257,41 +289,122 @@ test("a rejected steer leaves the current generation running", async () => {
   model.close();
 });
 
-test("one WebSocket is reused across turns and cancellation is scoped to its lane", async () => {
+test("completed WebSocket lanes are reused beyond the connection's stream id limit", async () => {
   const wire = new FakeConnection();
-  let connections = 0;
-  const model = createOpenAiResponsesModel({
-    apiKey: "k", model: "gpt-6-astra",
-    connect: () => { connections += 1; return wire; },
-  });
   const lanes: string[] = [];
+  const model = createOpenAiResponsesModel({
+    apiKey: "k", model: "gpt-6-astra", connect: () => wire,
+  });
   wire.onSend = (event) => {
     if (event.type !== "response.create") return;
     const lane = laneOf(event);
     lanes.push(lane);
     wire.message(created(lane, `resp_${lanes.length}`));
-    if (lanes.length === 1) wire.message(completed(lane, "resp_1"));
+    wire.message(completed(lane, `resp_${lanes.length}`));
   };
-  expect((await drain(model.generate({ messages: [{ role: "user", content: "first" }] }))).result.ok).toBe(true);
+
+  for (let turn = 0; turn < 40; turn += 1) {
+    const outcome = await drain(model.generate({ messages: [{ role: "user", content: `turn ${turn}` }] }));
+    expect(outcome.result.ok).toBe(true);
+  }
+
+  expect(lanes).toHaveLength(40);
+  expect(new Set(lanes).size).toBe(1);
+  expect(wire.closes).toBe(0);
+  model.close();
+  expect(wire.closes).toBe(1);
+});
+
+test("a full WebSocket retires after its 16 overlapping responses drain", async () => {
+  const wires: FakeConnection[] = [];
+  const lanes: string[][] = [];
+  const model = createOpenAiResponsesModel({
+    apiKey: "k", model: "gpt-6-astra",
+    connect: () => {
+      const wireIndex = wires.length;
+      const wire = new FakeConnection();
+      wires.push(wire);
+      lanes.push([]);
+      wire.onSend = (event) => {
+        if (event.type === "response.create") lanes[wireIndex]!.push(laneOf(event));
+      };
+      return wire;
+    },
+  });
+  const generations = Array.from({ length: 17 }, (_, turn) =>
+    drain(model.generate({ messages: [{ role: "user", content: `turn ${turn}` }] })));
+  await until(() => lanes.reduce((count, connection) => count + connection.length, 0) === 17);
+
+  expect(wires).toHaveLength(2);
+  expect(lanes[0]).toHaveLength(16);
+  expect(new Set(lanes[0]).size).toBe(16);
+  expect(lanes[1]).toHaveLength(1);
+  for (const [wireIndex, wire] of wires.entries()) {
+    for (const [laneIndex, lane] of lanes[wireIndex]!.entries()) {
+      wire.message(created(lane, `resp_${wireIndex}_${laneIndex}`));
+      wire.message(completed(lane, `resp_${wireIndex}_${laneIndex}`));
+    }
+  }
+  expect((await Promise.all(generations)).every((outcome) => outcome.result.ok)).toBe(true);
+  expect(wires[0]!.closes).toBe(1);
+  expect(wires[1]!.closes).toBe(0);
+  model.close();
+  expect(wires[1]!.closes).toBe(1);
+});
+
+test("cancellation quarantines its lane while overlapping work drains", async () => {
+  const wires: FakeConnection[] = [];
+  const lanes: string[][] = [];
+  let requests = 0;
+  const model = createOpenAiResponsesModel({
+    apiKey: "k", model: "gpt-6-astra",
+    connect: () => {
+      const index = wires.length;
+      const wire = new FakeConnection();
+      wires.push(wire);
+      lanes.push([]);
+      wire.onSend = (event) => {
+        if (event.type !== "response.create") return;
+        requests += 1;
+        const lane = laneOf(event);
+        lanes[index]!.push(lane);
+        wire.message(created(lane, `resp_${requests}`));
+        if (requests === 1) wire.message(completed(lane, "resp_1"));
+      };
+      return wire;
+    },
+  });
+  expect((await drain(model.generate({ messages: [{ role: "user", content: "warm up" }] }))).result.ok).toBe(true);
 
   const cancelled = new AbortController();
   const first = drain(model.generate({ messages: [{ role: "user", content: "cancel" }], signal: cancelled.signal }));
   const second = drain(model.generate({ messages: [{ role: "user", content: "continue" }] }));
-  await Promise.resolve();
+  await until(() => lanes[0]?.length === 3);
+  const cancelledLane = lanes[0]![1]!;
+  const liveLane = lanes[0]![2]!;
   cancelled.abort();
-  await Promise.resolve();
-  const liveLane = lanes.at(-1)!;
-  wire.message({ type: "response.output_text.delta", stream_id: liveLane, delta: "done" });
-  wire.message(completed(liveLane, "resp_3"));
-  const [stopped, continued] = await Promise.all([first, second]);
+  const third = drain(model.generate({ messages: [{ role: "user", content: "new connection" }] }));
+  await until(() => lanes[1]?.length === 1);
+  const nextLane = lanes[1]![0]!;
 
-  expect(connections).toBe(1);
-  expect(new Set(lanes).size).toBe(3);
+  wires[0]!.message({ type: "response.output_text.delta", stream_id: cancelledLane, delta: "late" });
+  wires[0]!.message({ type: "response.output_text.delta", stream_id: liveLane, delta: "continued" });
+  wires[1]!.message({ type: "response.output_text.delta", stream_id: nextLane, delta: "separate" });
+  wires[0]!.message(completed(liveLane, "resp_3"));
+  wires[1]!.message(completed(nextLane, "resp_4"));
+  const [stopped, continued, separate] = await Promise.all([first, second, third]);
+
+  expect(wires).toHaveLength(2);
+  expect(lanes[0]![0]).toBe(cancelledLane);
+  expect(liveLane).not.toBe(cancelledLane);
   expect(stopped.result).toMatchObject({ ok: false, error: { code: "cancelled" } });
-  expect(continued.result.ok && continued.result.value.message.content).toBe("done");
-  expect(wire.closes).toBe(0);
+  expect(stopped.deltas).toEqual([]);
+  expect(continued.result.ok && continued.result.value.message.content).toBe("continued");
+  expect(separate.result.ok && separate.result.value.message.content).toBe("separate");
+  expect(wires[0]!.closes).toBe(1);
+  expect(wires[1]!.closes).toBe(0);
   model.close();
-  expect(wire.closes).toBe(1);
+  expect(wires[1]!.closes).toBe(1);
 });
 
 test("capabilities are absent unless explicitly enabled", () => {

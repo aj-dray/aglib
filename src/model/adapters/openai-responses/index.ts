@@ -10,6 +10,8 @@ import type { JsonValue } from "../../../json.js";
 import { err, ok, type Result } from "../../../result.js";
 
 const provider = "openai-responses";
+const maxActiveResponses = 16;
+const maxStreamIds = 32;
 
 interface StreamEnvelope {
   type: string;
@@ -48,14 +50,23 @@ interface ResponsesLane extends AsyncIterable<StreamEnvelope> {
   send(event: ResponsesClientEvent): void;
   /** Stop this consumer while leaving the shared transport available to other lanes. */
   cancel(): void;
-  /** Forget this completed lane without closing the shared transport. */
-  release(): void;
+  /** Release a terminal lane for reuse, or quarantine an unfinished lane. */
+  release(terminal: boolean): void;
+}
+
+interface HubLane {
+  active: boolean;
+  queue: EnvelopeQueue;
 }
 
 class ResponsesHub {
   readonly #connection: OpenAiResponsesConnection;
-  readonly #lanes = new Map<string, EnvelopeQueue>();
+  readonly #lanes = new Map<string, HubLane>();
+  readonly #freeIds: string[] = [];
   readonly #onEnd: () => void;
+  #activeResponses = 0;
+  #issuedIds = 0;
+  #retiring = false;
   #ended = false;
 
   constructor(connection: OpenAiResponsesConnection, onEnd: () => void) {
@@ -64,19 +75,22 @@ class ResponsesHub {
     void this.#read();
   }
 
-  get ended(): boolean { return this.#ended; }
-
-  open(): ResponsesLane {
-    if (this.#ended) throw new Error("Responses WebSocket is closed");
-    const id = `aglib-${crypto.randomUUID()}`;
+  open(): ResponsesLane | undefined {
+    if (this.#ended || this.#retiring || this.#activeResponses >= maxActiveResponses) return undefined;
+    let id = this.#freeIds.pop();
+    if (!id) {
+      if (this.#issuedIds >= maxStreamIds) return undefined;
+      id = `aglib-${crypto.randomUUID()}`;
+      this.#issuedIds += 1;
+    }
     const queue = new EnvelopeQueue();
-    this.#lanes.set(id, queue);
+    this.#lanes.set(id, { active: true, queue });
+    this.#activeResponses += 1;
     let released = false;
-    const release = () => {
+    const release = (terminal: boolean) => {
       if (released) return;
       released = true;
-      this.#lanes.delete(id);
-      queue.end();
+      this.#release(id, terminal);
     };
     return {
       send: (event) => {
@@ -88,11 +102,17 @@ class ResponsesHub {
       },
       cancel: () => {
         queue.push({ type: "close", reason: "generation cancelled" });
-        release();
+        release(false);
       },
       release,
       [Symbol.asyncIterator]: () => queue[Symbol.asyncIterator](),
     };
+  }
+
+  retire(): void {
+    if (this.#ended) return;
+    this.#retiring = true;
+    this.#closeWhenDrained();
   }
 
   close(): void {
@@ -108,11 +128,11 @@ class ResponsesHub {
           const event = envelope.message as unknown as Record<string, unknown>;
           const lane = string(event["stream_id"]);
           if (lane) {
-            this.#lanes.get(lane)?.push(envelope);
+            this.#lanes.get(lane)?.queue.push(envelope);
           } else if (string(event["type"]) === "error") {
             this.#broadcast(envelope);
           } else if (this.#lanes.size === 1) {
-            this.#lanes.values().next().value?.push(envelope);
+            this.#lanes.values().next().value?.queue.push(envelope);
           } else {
             this.#finish({
               type: "error",
@@ -133,14 +153,35 @@ class ResponsesHub {
   }
 
   #broadcast(envelope: StreamEnvelope): void {
-    for (const queue of this.#lanes.values()) queue.push(envelope);
+    for (const lane of this.#lanes.values()) lane.queue.push(envelope);
+  }
+
+  #release(id: string, terminal: boolean): void {
+    const lane = this.#lanes.get(id);
+    if (!lane) return;
+    lane.active = false;
+    this.#activeResponses -= 1;
+    lane.queue.end();
+    if (terminal) {
+      this.#lanes.delete(id);
+      this.#freeIds.push(id);
+    } else {
+      // An unfinished response can still emit events carrying this stream id.
+      // Retire the connection rather than let those events enter another generation.
+      this.#retiring = true;
+    }
+    this.#closeWhenDrained();
+  }
+
+  #closeWhenDrained(): void {
+    if (this.#retiring && ![...this.#lanes.values()].some((lane) => lane.active)) this.close();
   }
 
   #finish(envelope: StreamEnvelope): void {
     if (this.#ended) return;
     this.#ended = true;
     this.#broadcast(envelope);
-    for (const queue of this.#lanes.values()) queue.end();
+    for (const lane of this.#lanes.values()) lane.queue.end();
     this.#lanes.clear();
     this.#onEnd();
   }
@@ -191,16 +232,22 @@ export function createOpenAiResponsesModel(options: OpenAiResponsesOptions): Ope
       },
     };
   });
+  const hubs = new Set<ResponsesHub>();
   let hub: ResponsesHub | undefined;
 
   const lane = () => {
-    if (!hub || hub.ended) {
-      const next = new ResponsesHub(connect(), () => {
-        if (hub === next) hub = undefined;
-      });
-      hub = next;
-    }
-    return hub.open();
+    const existing = hub?.open();
+    if (existing) return existing;
+    hub?.retire();
+    const next = new ResponsesHub(connect(), () => {
+      hubs.delete(next);
+      if (hub === next) hub = undefined;
+    });
+    hubs.add(next);
+    hub = next;
+    const opened = next.open();
+    if (!opened) throw new Error("Responses WebSocket opened without an available lane");
+    return opened;
   };
 
   return {
@@ -210,7 +257,7 @@ export function createOpenAiResponsesModel(options: OpenAiResponsesOptions): Ope
       return generation(lane, options.model, request, options.steering === true);
     },
     close() {
-      hub?.close();
+      for (const openHub of [...hubs]) openHub.close();
       hub = undefined;
     },
   };
@@ -254,10 +301,12 @@ function generation(
     const itemCalls = new Map<string, string>();
     const providerItems: JsonValue[] = [];
     const seenItems = new Set<string>();
+    const itemPhases = new Map<string, "commentary" | "final_answer">();
     let usage: Usage = {};
     let servedModel: string | undefined;
     let completed: Record<string, unknown> | undefined;
     let refused = false;
+    let terminal = false;
 
     try {
       connection.send(encodeRequest(configuredModel, request));
@@ -318,13 +367,20 @@ function generation(
             code: "failed", retryable: true,
             message: "Steering awaits client tool input; replay the durable input at the next model boundary",
           });
-          if (completed && noLiveSteers(steers)) return finish(completed, text, calls, providerItems, usage, refused, servedModel);
+          if (completed && noLiveSteers(steers)) {
+            terminal = true;
+            return finish(completed, text, calls, providerItems, usage, refused, servedModel);
+          }
           continue;
         }
 
         if (type === "response.output_text.delta") {
           const delta = string(event["delta"]);
-          if (delta) { text.push(delta); yield { type: "text.delta", text: delta }; }
+          const phase = itemPhases.get(string(event["item_id"]) ?? "");
+          if (delta) {
+            text.push(delta);
+            yield { type: "text.delta", text: delta, ...(phase ? { phase } : {}) };
+          }
           continue;
         }
         if (type === "response.refusal.delta" || type === "response.refusal.done") {
@@ -338,8 +394,10 @@ function generation(
         }
         if (type === "response.output_item.added") {
           const item = record(event["item"]);
+          const itemId = string(item?.["id"]);
+          const phase = outputPhase(item?.["phase"]);
+          if (itemId && phase) itemPhases.set(itemId, phase);
           if (item?.["type"] === "function_call") {
-            const itemId = string(item["id"]);
             const callId = string(item["call_id"]);
             if (itemId && callId) itemCalls.set(itemId, callId);
           }
@@ -386,9 +444,13 @@ function generation(
               code: "failed", retryable: true,
               message: "Steering did not reach a successor before client tool input became required",
             });
+            terminal = true;
             return finish(response, text, calls, providerItems, usage, refused, servedModel);
           }
-          if (noLiveSteers(steers)) return finish(response, text, calls, providerItems, usage, refused, servedModel);
+          if (noLiveSteers(steers)) {
+            terminal = true;
+            return finish(response, text, calls, providerItems, usage, refused, servedModel);
+          }
           continue;
         }
 
@@ -402,12 +464,14 @@ function generation(
           usage = addUsage(usage, decodeUsage(record(response["usage"])));
           if (record(response["incomplete_details"])?.["reason"] === "steered") continue;
           rejectSteers(steers, { code: "failed", message: "Response ended incomplete", retryable: true });
+          terminal = true;
           return finish(response, text, calls, providerItems, usage, refused || hasRefusal(response), servedModel);
         }
 
         if (type === "response.failed") {
           const failure = responseFailure(record(event["response"]));
           rejectSteers(steers, failure);
+          terminal = true;
           return err(failure);
         }
       }
@@ -424,7 +488,7 @@ function generation(
     } finally {
       ended = true;
       request.signal?.removeEventListener("abort", abort);
-      connection.release();
+      connection.release(terminal);
       rejectSteers(steers, {
         code: "failed", message: "Generation ended before steering reached a successor", retryable: true,
       });
@@ -735,6 +799,8 @@ function providerError(error: unknown): ModelError {
 }
 
 const cancelled = (): ModelError => ({ code: "cancelled", message: "Generation cancelled", retryable: false });
+const outputPhase = (value: unknown): "commentary" | "final_answer" | undefined =>
+  value === "commentary" || value === "final_answer" ? value : undefined;
 const record = (value: unknown): Record<string, unknown> | undefined =>
   value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 const array = (value: unknown): readonly unknown[] => Array.isArray(value) ? value : [];

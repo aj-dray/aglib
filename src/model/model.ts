@@ -46,7 +46,7 @@ export interface ModelRequest {
 }
 
 export type ModelDelta =
-  | { type: "text.delta"; text: string }
+  | { type: "text.delta"; text: string; phase?: "commentary" | "final_answer" }
   | { type: "reasoning.delta"; text: string }
   | { type: "tool-call.delta"; callId: string; arguments: string }
   /** A complete call may be executable before the response itself is done. */

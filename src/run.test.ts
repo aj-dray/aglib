@@ -932,3 +932,27 @@ test("a claim's queue is consumed by the run that commits it", async () => {
   const opened = after.value.entries.find((entry) => entry.type === "run.started");
   expect(opened?.type === "run.started" && opened.from).toEqual({ kind: "session", id: "peer" });
 });
+test("native text streaming retains provider phases without relabelling reasoning", async () => {
+  const model: Model = {
+    id: "phased",
+    async *generate() {
+      yield { type: "text.delta", text: "Checking", phase: "commentary" };
+      yield { type: "reasoning.delta", text: "private" };
+      yield { type: "text.delta", text: "Available", phase: "final_answer" };
+      yield { type: "text.delta", text: "Unphased" };
+      return ok({
+        message: { content: "Available" }, finishReason: "stop",
+        usage: { inputTokens: 1, outputTokens: 1 },
+      });
+    },
+  };
+  const run = runAgent({ agent: agentWith(model), input: "check" });
+  const streamed = [];
+  for await (const update of run) {
+    if (update.type === "text.delta") streamed.push([update.text, update.phase]);
+  }
+  expect((await run.result).status).toBe("completed");
+  expect(streamed).toEqual([
+    ["Checking", "commentary"], ["Available", "final_answer"], ["Unphased", undefined],
+  ]);
+});

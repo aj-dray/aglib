@@ -233,7 +233,7 @@ export function createNativeHarness(options: NativeHarnessOptions): Harness {
           if (current.done) { step = current; break; }
           const delta = current.value;
           if (delta.type === "text.delta") {
-            context.emit({ type: "text.delta", text: delta.text, runId, generationId });
+            context.emit({ ...delta, runId, generationId });
           }
           if (delta.type === "reasoning.delta") {
             context.emit({ type: "reasoning.delta", text: delta.text, runId, generationId });
