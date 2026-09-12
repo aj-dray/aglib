@@ -51,6 +51,8 @@ export function runAgent(options: RunAgentOptions): AgentRun {
     const usage: Usage = {};
     let hookContext: HarnessContext | undefined;
     let result: RunResult | undefined;
+    let unwatch: (() => void) | undefined;
+    let clearInputWait: (() => void) | undefined;
 
     try {
       const { agent, store } = options;
@@ -101,14 +103,6 @@ export function runAgent(options: RunAgentOptions): AgentRun {
       // as broken. A resumption without an interrupted run is refused below.
       const runId = arrivals.length || !interrupted ? crypto.randomUUID() : interrupted;
 
-      // Deliveries ride the next commit, which is the one that records the work
-      // that produced them. They used to be held back to the run's final entry
-      // so that a failed run handed nothing to anyone — a stronger promise than
-      // any caller needs, and it was being paid for with a lie: a `send` tool
-      // returned "Delivered" and interrupted the recipient many turns before
-      // the delivery existed, and never at all if a later turn failed.
-      const deliveries: Delivery[] = [];
-
       // The ceiling has one owner, and it is here rather than in a harness.
       // Counting committed entries is the only way to bound a harness that owns
       // its own loop — which is most of them — so a limit declared on the agent
@@ -117,6 +111,7 @@ export function runAgent(options: RunAgentOptions): AgentRun {
       let stopped: Failure | undefined;
       let turns = 0;
       let toolCalls = 0;
+      const generations = new Set<string>();
 
       function exceeded(): Failure | undefined {
         if (!limits) return undefined;
@@ -140,10 +135,8 @@ export function runAgent(options: RunAgentOptions): AgentRun {
       // entries carrying it are durable, and not before.
       let take = claim?.pending.length ?? 0;
 
-      async function commit(entries: readonly Entry[], enqueue?: readonly Delivery[]): Promise<void> {
-        const outgoing = [...deliveries, ...(enqueue ?? [])];
-        deliveries.length = 0;
-        if (!entries.length && !outgoing.length) return;
+      async function commit(entries: readonly Entry[], deliveries: readonly Delivery[] = []): Promise<void> {
+        if (!entries.length && !deliveries.length) return;
         // Counted before the write, not after: the tokens were consumed whether
         // or not this entry wins the compare-and-swap, and a run that reports
         // nothing after paying for a generation is the opposite of what
@@ -155,7 +148,7 @@ export function runAgent(options: RunAgentOptions): AgentRun {
         if (store) {
           const written = await store.append({
             sessionId, expectedSeq: log.seq, entries,
-            ...(outgoing.length ? { enqueue: outgoing } : {}),
+            ...(deliveries.length ? { enqueue: deliveries } : {}),
             ...(take ? { takePending: take } : {}),
           });
           if (!written.ok) throw new CommitFailed(written.error, positionOf(written.error, log.seq));
@@ -165,7 +158,16 @@ export function runAgent(options: RunAgentOptions): AgentRun {
 
         if (!stopped) {
           for (const entry of entries) {
-            if (entry.type === "assistant") turns += 1;
+            if (entry.type === "assistant") {
+              const id = entry.generation?.id;
+              // A provider may commit a completed asynchronous call before
+              // the generation itself ends. It is recovery state, not another
+              // turn and not yet the boundary at which a turn ceiling applies.
+              if (!entry.generation || entry.generation.endedAt) {
+                if (!id || !generations.has(id)) turns += 1;
+                if (id) generations.add(id);
+              }
+            }
             // `tool.finished`, not `tool.started`: the start is committed before
             // the batch executes, so counting it there cancelled the very batch
             // that reached the ceiling — `maxToolCalls: 1` ran no tools at all,
@@ -175,6 +177,36 @@ export function runAgent(options: RunAgentOptions): AgentRun {
           stopped = exceeded();
           if (stopped) controller.abort();
         }
+      }
+
+      let inputWake = false;
+      let wakePromise: Promise<void> | undefined;
+      let resolveWake: (() => void) | undefined;
+      const wake = () => {
+        inputWake = true;
+        resolveWake?.();
+        resolveWake = undefined;
+        wakePromise = undefined;
+      };
+      if (store?.watch) {
+        unwatch = store.watch((change) => {
+          if (change.sessionId !== sessionId || !change.runnable) return;
+          wake();
+        });
+      }
+      signal.addEventListener("abort", wake);
+      clearInputWait = () => signal.removeEventListener("abort", wake);
+
+      async function waitForInput(): Promise<void> {
+        if (!store || signal.aborted) return;
+        if (inputWake) { inputWake = false; return; }
+        if (!store.watch) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 100));
+          return;
+        }
+        wakePromise ??= new Promise<void>((resolve) => { resolveWake = resolve; });
+        await wakePromise;
+        inputWake = false;
       }
 
       // Input that arrived while this activation was running, taken from the
@@ -191,7 +223,12 @@ export function runAgent(options: RunAgentOptions): AgentRun {
         if (signal.aborted) return 0;
         const current = await store.read({ sessionId, afterSeq: log.seq });
         if (!current.ok || !current.value.pending.length) return 0;
-        const waiting = current.value.pending;
+        // Only `turn` asks to join this activation. The queue is ordered and
+        // consumption is a prefix, so a later delivery cannot jump over one
+        // explicitly left for the next activation.
+        const boundary = current.value.pending.findIndex((delivery) => delivery.priority !== "turn");
+        const waiting = current.value.pending.slice(0, boundary < 0 ? current.value.pending.length : boundary);
+        if (!waiting.length) return 0;
         take = waiting.length;
         await commit(waiting.map((delivery): Entry => ({
           type: "run.started", runId, input: delivery.input,
@@ -205,7 +242,6 @@ export function runAgent(options: RunAgentOptions): AgentRun {
             tools: agent.tools,
             ...(agent.decide ? { decide: agent.decide } : {}),
             sessionId, runId,
-            enqueue: (delivery) => deliveries.push(delivery),
             report: (callId, data) => updates.push({ type: "tool.progress", callId, data }),
           })
         : undefined;
@@ -268,22 +304,30 @@ export function runAgent(options: RunAgentOptions): AgentRun {
       stopped ??= exceeded();
 
       function makeContext(): HarnessContext {
+        const supplied = options.context;
+        const current = supplied ? {
+          ...(supplied.run ? { run: supplied.run } : {}),
+          get turn() {
+            const value = supplied.turn;
+            return typeof value === "function" ? value() : value;
+          },
+        } : undefined;
         return {
-        sessionId, runId,
-        instructions: agent.instructions,
-        history: () => toMessages({
+          sessionId, runId,
           instructions: agent.instructions,
-          entries: log.entries,
-          ...(agent.attribution ? { attribution: true } : {}),
-          ...(options.context ? { context: options.context } : {}),
-        }),
-        entries: () => log.entries,
-        ...(options.context ? { context: options.context } : {}),
-        ...(executor ? { tools: executor } : {}),
-        commit: (entries) => commit(entries),
-        ...(store ? { drain } : {}),
-        emit: (update) => updates.push(update),
-        signal, hooks,
+          history: () => toMessages({
+            instructions: agent.instructions,
+            entries: log.entries,
+            ...(agent.attribution ? { attribution: true } : {}),
+            ...(current ? { context: current } : {}),
+          }),
+          entries: () => log.entries,
+          ...(current ? { context: current } : {}),
+          ...(executor ? { tools: executor } : {}),
+          commit,
+          ...(store ? { drain, waitForInput } : {}),
+          emit: (update) => updates.push(update),
+          signal, hooks,
         };
       }
 
@@ -360,6 +404,8 @@ export function runAgent(options: RunAgentOptions): AgentRun {
           }
         }
       }
+      unwatch?.();
+      clearInputWait?.();
       updates.close();
     }
   }

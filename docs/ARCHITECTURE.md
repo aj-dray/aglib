@@ -94,7 +94,8 @@ outstanding longer than the claim window was handed to a second worker while the
 going — and a compare-and-swap can refuse the losing write, but it cannot un-run a tool call that
 already had its effect. A worker that dies still releases its session, because a dead worker stops
 writing. What remains is one narrow case: an activation that commits nothing at all for longer than
-the window can still be taken. Set `claimMs` above the longest silent turn a harness can produce.
+the window can still be taken, including while a long asynchronous tool is the only work pending.
+Set `claimMs` above the longest silent turn or tool duration the deployment permits.
 
 The claim is still deliberately minimal: nothing renews it but the work itself — no heartbeat, no
 renewal subsystem, no fencing token. It expires on its own so a worker that dies does not strand a
@@ -181,6 +182,12 @@ what the recipient receives commit together, or neither happens. Spawning a chil
 parent and messaging a peer are all this one operation, which is why there is no separate mailbox,
 bus or inbox table.
 
+A tool executor reports one completed call at a time. Each completion carries only the deliveries
+that call produced, and the harness commits that result with those deliveries before accepting the
+next completion. A quick `send` therefore reaches its recipient while an adjacent slow tool is
+still running; a later failure cannot misattribute or erase the earlier delivery. Adjacent
+read-only calls may finish out of order. Effectful calls retain their declared order.
+
 A `Delivery` carries four things beyond its content:
 
 | Field | Why it exists |
@@ -190,7 +197,7 @@ A `Delivery` carries four things beyond its content:
 | `priority` | Where in the recipient's loop it lands: `interrupt`, `turn`, or `next`. |
 | `id` | The sender's key for this delivery, so a retried send does not arrive twice. |
 
-**Three places, not a scale of urgency.** `interrupt` ends the running activation so the next one begins with the message, and its uncommitted work is lost. `turn` is folded into the activation already running, before its next model call, where nothing is half-done — so a busy session reads it and keeps its work. `next` waits for the start of the next activation.
+**Three places, not a scale of urgency.** `interrupt` ends the running activation so the next one begins with the message, and its uncommitted work is lost. `turn` is folded into the activation already running, before its next model call, where nothing is half-done — including after a terminal generation, before the activation is closed. `next` waits for the start of the recipient's next activation and is never drained into the current one.
 
 That is a change from `now | next | later`, and the reason is worth keeping. `now` meant *either* of the first two depending on the harness: fold if it had a safe point, end the activation if it did not. One word for "your message arrives and the work continues" and "your message arrives and a turn's work is destroyed". The defence was that a priority names the requirement rather than the mechanism — but those are not two mechanisms serving one requirement, they are two different things happening to somebody's work, and the giveaway was that a runtime answer had to be invented to tell the sender which one it got. `later` named a fourth thing nothing implemented.
 

@@ -1,11 +1,11 @@
 import type { Content } from "../content.js";
-import type { From, Stored, ToolCall } from "./entry.js";
+import type { From, ProviderState, Stored, ToolCall } from "./entry.js";
 
 /** A message as a provider takes it: built per turn from the log, never held. */
 export type Message =
   | { role: "system"; content: Content }
   | { role: "user"; content: Content }
-  | { role: "assistant"; content: Content; calls?: readonly ToolCall[] }
+  | { role: "assistant"; content: Content; calls?: readonly ToolCall[]; providerState?: ProviderState }
   | { role: "tool"; callId: string; content: Content; isError?: boolean };
 
 /**
@@ -70,7 +70,11 @@ export function toMessages(input: {
   // would make the session permanently unusable. What is said is what is known
   // — the call did not report back — and never an invented result.
   const answered = new Set(
-    input.entries.filter((entry) => entry.type === "tool.finished").map((entry) => entry.callId),
+    input.entries.filter((entry) => entry.type === "tool.finished")
+      .map((entry) => `${entry.runId}\u0000${entry.callId}`),
+  );
+  const closed = new Set(
+    input.entries.filter((entry) => entry.type === "run.finished").map((entry) => entry.runId),
   );
 
   for (const entry of input.entries) {
@@ -92,9 +96,10 @@ export function toMessages(input: {
           role: "assistant",
           content: entry.content,
           ...(entry.calls?.length ? { calls: entry.calls } : {}),
+          ...(entry.providerState ? { providerState: entry.providerState } : {}),
         });
         for (const call of entry.calls ?? []) {
-          if (answered.has(call.callId)) continue;
+          if (answered.has(`${entry.runId}\u0000${call.callId}`) || !closed.has(entry.runId)) continue;
           messages.push({
             role: "tool", callId: call.callId, isError: true,
             content: "This call did not report back: the activation ended before its result was committed.",

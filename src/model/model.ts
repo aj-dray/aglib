@@ -1,5 +1,5 @@
 import type { Content, ContentPart } from "../content.js";
-import type { ToolCall, Usage } from "../session/entry.js";
+import type { ProviderState, ToolCall, Usage } from "../session/entry.js";
 import type { Message } from "../session/messages.js";
 import type { ToolSpec } from "../tools/tool.js";
 import type { Failure, Result } from "../result.js";
@@ -48,13 +48,16 @@ export interface ModelRequest {
 export type ModelDelta =
   | { type: "text.delta"; text: string }
   | { type: "reasoning.delta"; text: string }
-  | { type: "tool-call.delta"; callId: string; arguments: string };
+  | { type: "tool-call.delta"; callId: string; arguments: string }
+  /** A complete call may be executable before the response itself is done. */
+  | { type: "tool-call.done"; call: ToolCall };
 
 export interface ModelResponse {
   message: { content: Content; calls?: readonly ToolCall[] };
   finishReason: "stop" | "tool-calls" | "length" | "refusal";
   usage: Usage;
   model?: string;
+  providerState?: ProviderState;
 }
 
 export interface ModelError extends Failure {
@@ -66,9 +69,20 @@ export interface ModelError extends Failure {
  * response drains the generator and takes its return value, so no adapter has
  * to implement the same normalization twice.
  */
+export type ModelSteerResult =
+  | { status: "accepted"; id: string }
+  | { status: "rejected"; error: ModelError };
+
+export interface ModelGeneration extends AsyncGenerator<ModelDelta, Result<ModelResponse, ModelError>> {
+  /** Queue new user messages on this active generation, when its provider can. */
+  steer?(input: readonly Message[]): Promise<ModelSteerResult>;
+}
+
 export interface Model {
   readonly id: string;
-  generate(request: ModelRequest): AsyncGenerator<ModelDelta, Result<ModelResponse, ModelError>>;
+  /** This configured model accepts tools declared for asynchronous execution. */
+  readonly asyncTools?: true;
+  generate(request: ModelRequest): ModelGeneration;
 }
 
 /**
@@ -80,7 +94,7 @@ export interface Model {
  * whole response does, and this is the four lines of doing it.
  */
 export async function collect(
-  generation: AsyncGenerator<ModelDelta, Result<ModelResponse, ModelError>>,
+  generation: ModelGeneration,
 ): Promise<Result<ModelResponse, ModelError>> {
   let step = await generation.next();
   while (!step.done) step = await generation.next();
@@ -93,4 +107,4 @@ export async function collect(
  * own them, so the port is the whole of its surface — every one of them appears
  * in a type above, which is what makes this the place to get them.
  */
-export type { ContentPart, Message, ToolCall, ToolSpec, Usage };
+export type { ContentPart, Message, ProviderState, ToolCall, ToolSpec, Usage };

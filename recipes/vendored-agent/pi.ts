@@ -21,7 +21,7 @@ import { Agent } from "@earendil-works/pi-agent-core";
 // The stream function is pi's own: it speaks the wire the descriptor names.
 import { streamSimple } from "@earendil-works/pi-ai/compat";
 import type { Harness, HarnessContext, HarnessResult } from "aglib/harness";
-import type { Entry, ToolCall, Usage } from "aglib/session";
+import type { Delivery, Entry, ToolCall, ToolResult, Usage } from "aglib/session";
 import { textOf } from "aglib";
 import type { ToolExecutor } from "aglib";
 
@@ -60,6 +60,7 @@ export function createPiHarness(options: PiOptions): Harness {
 
 async function runTurn(options: PiOptions, context: HarnessContext): Promise<HarnessResult> {
   const executor = context.tools;
+  const completions = new Map<string, { result: ToolResult; deliveries: readonly Delivery[] }>();
   const agent = new Agent({
     streamFn: streamSimple,
     // A descriptor, not a client: naming the wire and the base URL is the whole
@@ -79,7 +80,7 @@ async function runTurn(options: PiOptions, context: HarnessContext): Promise<Har
         maxTokens: options.maxTokens ?? 8_192,
       } as never,
       thinkingLevel: options.effort ?? "low",
-      tools: toolsFor(executor, context) as never,
+      tools: toolsFor(executor, context, completions) as never,
       messages: transcriptFor(context) as never,
     },
     getApiKey: () => options.token,
@@ -113,10 +114,13 @@ async function runTurn(options: PiOptions, context: HarnessContext): Promise<Har
       return;
     }
     if (event.type === "tool_execution_end") {
+      const completion = completions.get(event.toolCallId);
+      completions.delete(event.toolCallId);
       await context.commit([{
         type: "tool.finished", runId: context.runId, callId: event.toolCallId,
-        result: { content: textFrom(event.result), ...(event.isError ? { isError: true } : {}) },
-      }]);
+        result: completion?.result
+          ?? { content: textFrom(event.result), ...(event.isError ? { isError: true } : {}) },
+      }], completion?.deliveries);
     }
   });
 
@@ -151,7 +155,11 @@ async function runTurn(options: PiOptions, context: HarnessContext): Promise<Har
  * is at runtime, so nothing is converted — the same schema the model is shown
  * is the one the executor validates against.
  */
-function toolsFor(executor: ToolExecutor | undefined, context: HarnessContext): unknown[] {
+function toolsFor(
+  executor: ToolExecutor | undefined,
+  context: HarnessContext,
+  completions: Map<string, { result: ToolResult; deliveries: readonly Delivery[] }>,
+): unknown[] {
   if (!executor) return [];
   return executor.list().map((spec) => ({
     name: spec.name,
@@ -160,8 +168,11 @@ function toolsFor(executor: ToolExecutor | undefined, context: HarnessContext): 
     parameters: spec.parameters,
     execute: async (toolCallId: string, params: unknown) => {
       const call: ToolCall = { callId: toolCallId, name: spec.name, arguments: JSON.stringify(params ?? {}) };
-      const answered = await executor.execute({ calls: [call], signal: context.signal });
-      const result = answered.results[0]?.result;
+      let result: ToolResult | undefined;
+      for await (const completion of executor.execute({ calls: [call], signal: context.signal })) {
+        result = completion.result;
+        completions.set(toolCallId, completion);
+      }
       return {
         content: [{ type: "text", text: result ? textOf(result.content) : "" }],
         details: result?.details ?? null,
@@ -266,4 +277,3 @@ const deltaOf = (event: unknown): string => {
 };
 
 const safeJson = (raw: string): unknown => { try { return JSON.parse(raw); } catch { return {}; } };
-

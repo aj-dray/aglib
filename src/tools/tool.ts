@@ -11,6 +11,8 @@ export interface ToolSpec {
   description: string;
   /** JSON Schema. */
   parameters: JsonValue;
+  /** The model may continue its turn while the application runs this tool. */
+  async?: boolean;
   annotations?: { readOnly?: boolean; sequential?: boolean };
 }
 
@@ -80,8 +82,12 @@ export type Decide = (call: {
 /** What a harness is handed to reach application tools. */
 export interface ToolExecutor {
   list(): readonly ToolSpec[];
-  execute(input: { calls: readonly ToolCall[]; signal?: AbortSignal }):
-    Promise<{ results: readonly { callId: string; result: ToolResult }[] }>;
+  /** Each completion carries only the deliveries made by that call. */
+  execute(input: { calls: readonly ToolCall[]; signal?: AbortSignal }): AsyncIterable<{
+    callId: string;
+    result: ToolResult;
+    deliveries: readonly Delivery[];
+  }>;
 }
 
 /**
@@ -93,6 +99,7 @@ export function defineTool<TSchema extends z.ZodType>(input: {
   name: string;
   description: string;
   schema: TSchema;
+  async?: boolean;
   annotations?: ToolSpec["annotations"];
   execute(args: z.output<TSchema>, context: ToolContext): ToolResult | Promise<ToolResult>;
 }): Tool {
@@ -102,6 +109,7 @@ export function defineTool<TSchema extends z.ZodType>(input: {
       name: input.name,
       description: input.description,
       parameters,
+      ...(input.async !== undefined ? { async: input.async } : {}),
       ...(input.annotations ? { annotations: input.annotations } : {}),
     }),
     prepare(raw: unknown) {

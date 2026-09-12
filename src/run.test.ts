@@ -10,7 +10,7 @@ import { createSqliteStore } from "./store/adapters/sqlite.js";
 import { textOf } from "./content.js";
 import { ok } from "./result.js";
 import type { Agent } from "./agent.js";
-import type { Model } from "./model/model.js";
+import type { Message, Model } from "./model/model.js";
 
 const ledger = defineTool({
   name: "read_ledger", description: "read", annotations: { readOnly: true },
@@ -116,6 +116,245 @@ test("streamed text is provisional; committed entries are the record", async () 
   expect(entries).toEqual(["run.started", "assistant", "run.finished"]);
 });
 
+test("a complete asynchronous call starts while its generation keeps streaming", async () => {
+  const trace: string[] = [];
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let markToolFinished!: () => void;
+  const toolFinished = new Promise<void>((resolve) => { markToolFinished = resolve; });
+  const asyncCall = { callId: "async-1", name: "background", arguments: "{}", async: true };
+  let generation = 0;
+  const model: Model = {
+    id: "async-model", asyncTools: true,
+    async *generate(request) {
+      generation += 1;
+      if (generation === 1) {
+        yield { type: "tool-call.done", call: asyncCall };
+        trace.push("model-continued");
+        release();
+        await toolFinished;
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        return ok({
+          message: { content: "I started that.", calls: [asyncCall] },
+          finishReason: "tool-calls", usage: {},
+        });
+      }
+      expect(request.messages.some((message) => message.role === "tool" && message.callId === "async-1")).toBe(true);
+      return ok({ message: { content: "It finished." }, finishReason: "stop", usage: {} });
+    },
+  };
+  const background = defineTool({
+    name: "background", description: "background", schema: z.object({}), async: true,
+    execute: async () => {
+      trace.push("tool-started");
+      await gate;
+      trace.push("tool-finished");
+      markToolFinished();
+      return { content: "done" };
+    },
+  });
+  const store = createSqliteStore({ database: new Database(":memory:") });
+  const result = await runAgent({
+    agent: agentWith(model, { tools: [background] }), store, sessionId: "s", input: "start it",
+  }).result;
+
+  expect(result.status).toBe("completed");
+  expect(trace).toEqual(["tool-started", "model-continued", "tool-finished"]);
+  const read = await store.read({ sessionId: "s" });
+  if (!read.ok) throw new Error("read failed");
+  const started = read.value.entries.findIndex((entry) => entry.type === "tool.started" && entry.callId === "async-1");
+  const finished = read.value.entries.findIndex((entry) => entry.type === "tool.finished" && entry.callId === "async-1");
+  const generationFinished = read.value.entries.findIndex((entry) =>
+    entry.type === "assistant" && entry.content === "I started that.");
+  expect(started).toBeGreaterThan(-1);
+  expect(started).toBeLessThan(finished);
+  expect(finished).toBeLessThan(generationFinished);
+});
+
+test("an early asynchronous call entry counts with its completed generation as one turn", async () => {
+  const asyncCall = { callId: "async-1", name: "background", arguments: "{}", async: true };
+  let count = 0;
+  const model: Model = {
+    id: "one-turn", asyncTools: true,
+    async *generate() {
+      count += 1;
+      if (count === 1) {
+        yield { type: "tool-call.done", call: asyncCall };
+        return ok({ message: { content: "", calls: [asyncCall] }, finishReason: "tool-calls", usage: {} });
+      }
+      return ok({ message: { content: "done" }, finishReason: "stop", usage: {} });
+    },
+  };
+  const background = defineTool({
+    name: "background", description: "background", schema: z.object({}), async: true,
+    execute: () => ({ content: "done" }),
+  });
+  const result = await runAgent({
+    agent: agentWith(model, { tools: [background], limits: { maxTurns: 1 } }), input: "start",
+  }).result;
+  expect(result.status).toBe("failed");
+  if (result.status === "failed") expect(result.error.message).toBe("Stopped after 1 turns.");
+  expect(count).toBe(1);
+});
+
+test("a provider cannot launch a tool asynchronously unless the tool declares it too", async () => {
+  const trace: string[] = [];
+  const requested = { callId: "c1", name: "background", arguments: "{}", async: true };
+  let count = 0;
+  const model: Model = {
+    id: "async-model", asyncTools: true,
+    async *generate() {
+      count += 1;
+      if (count === 1) {
+        yield { type: "tool-call.done", call: requested };
+        trace.push("model-finished");
+        return ok({ message: { content: "", calls: [requested] }, finishReason: "tool-calls", usage: {} });
+      }
+      return ok({ message: { content: "done" }, finishReason: "stop", usage: {} });
+    },
+  };
+  const synchronous = defineTool({
+    name: "background", description: "background", schema: z.object({}),
+    execute: () => { trace.push("tool-started"); return { content: "done" }; },
+  });
+  const result = await runAgent({ agent: agentWith(model, { tools: [synchronous] }), input: "start" }).result;
+  expect(result.status).toBe("completed");
+  expect(trace).toEqual(["model-finished", "tool-started"]);
+});
+
+test("turn input arriving during a terminal generation is read before the activation ends", async () => {
+  const store = createSqliteStore({ database: new Database(":memory:") });
+  await store.create({ sessionId: "peer", agent: { id: "a", version: "1" } });
+  let count = 0;
+  const model: Model = {
+    id: "terminal-input",
+    async *generate(request) {
+      count += 1;
+      if (count === 1) {
+        const sent = await store.append({ sessionId: "peer", expectedSeq: 0, entries: [], enqueue: [
+          { sessionId: "s", input: "Correction: Friday", priority: "turn" },
+        ] });
+        if (!sent.ok) throw new Error(sent.error.message);
+        return ok({ message: { content: "Thursday" }, finishReason: "stop", usage: {} });
+      }
+      expect(JSON.stringify(request.messages)).toContain("Correction: Friday");
+      return ok({ message: { content: "Friday" }, finishReason: "stop", usage: {} });
+    },
+  };
+  const result = await runAgent({ agent: agentWith(model), store, sessionId: "s", input: "Which day?" }).result;
+  expect(result.status).toBe("completed");
+  if (result.status === "completed") expect(textOf(result.output)).toBe("Friday");
+});
+
+test("turn input can steer a generation that explicitly supports it", async () => {
+  const store = createSqliteStore({ database: new Database(":memory:") });
+  await store.create({ sessionId: "peer", agent: { id: "a", version: "1" } });
+  let release!: () => void;
+  const steered = new Promise<void>((resolve) => { release = resolve; });
+  const seen: string[] = [];
+  let generations = 0;
+  const model: Model = {
+    id: "steerable",
+    generate() {
+      generations += 1;
+      const iterator = (async function*() {
+        yield { type: "text.delta" as const, text: "checking" };
+        await steered;
+        return ok({ message: { content: "Friday" }, finishReason: "stop" as const, usage: {} });
+      })();
+      return Object.assign(iterator, {
+        steer: async (messages: readonly Message[]) => {
+          seen.push(JSON.stringify(messages));
+          release();
+          return { status: "accepted" as const, id: "successor" };
+        },
+      });
+    },
+  };
+  const run = runAgent({ agent: agentWith(model), store, sessionId: "s", input: "Which day?" });
+  const deliver = (async () => {
+    for await (const update of run) {
+      if (update.type !== "text.delta") continue;
+      const sent = await store.append({ sessionId: "peer", expectedSeq: 0, entries: [], enqueue: [
+        { sessionId: "s", input: "Correction: Friday", priority: "turn" },
+      ] });
+      if (!sent.ok) throw new Error(sent.error.message);
+      return;
+    }
+  })();
+  const [result] = await Promise.all([run.result, deliver]);
+  expect(result.status).toBe("completed");
+  expect(generations).toBe(1);
+  expect(seen.join()).toContain("Correction: Friday");
+});
+
+test("rejected steering finishes the current generation and retries durable input at the next boundary", async () => {
+  const store = createSqliteStore({ database: new Database(":memory:") });
+  await store.create({ sessionId: "peer", agent: { id: "a", version: "1" } });
+  let release!: () => void;
+  const attempted = new Promise<void>((resolve) => { release = resolve; });
+  let generations = 0;
+  const model: Model = {
+    id: "rejecting-steer",
+    generate(request) {
+      generations += 1;
+      if (generations === 2) {
+        expect(JSON.stringify(request.messages)).toContain("Correction: Friday");
+        return (async function*() {
+          return ok({ message: { content: "Friday" }, finishReason: "stop" as const, usage: {} });
+        })();
+      }
+      const iterator = (async function*() {
+        yield { type: "text.delta" as const, text: "checking" };
+        await attempted;
+        return ok({ message: { content: "Thursday" }, finishReason: "stop" as const, usage: {} });
+      })();
+      return Object.assign(iterator, {
+        steer: async () => {
+          release();
+          return { status: "rejected" as const, error: { code: "failed" as const, message: "not steerable", retryable: true } };
+        },
+      });
+    },
+  };
+  const run = runAgent({ agent: agentWith(model), store, sessionId: "s", input: "Which day?" });
+  const deliver = (async () => {
+    for await (const update of run) {
+      if (update.type !== "text.delta") continue;
+      const sent = await store.append({ sessionId: "peer", expectedSeq: 0, entries: [], enqueue: [
+        { sessionId: "s", input: "Correction: Friday", priority: "turn" },
+      ] });
+      if (!sent.ok) throw new Error(sent.error.message);
+      return;
+    }
+  })();
+  const [result] = await Promise.all([run.result, deliver]);
+  expect(result.status).toBe("completed");
+  if (result.status === "completed") expect(textOf(result.output)).toBe("Friday");
+  expect(generations).toBe(2);
+});
+
+test("turn context is evaluated again for every model request", async () => {
+  let current = "first clock";
+  let count = 0;
+  const seen: string[] = [];
+  const model: Model = {
+    id: "dynamic-context",
+    async *generate(request) {
+      seen.push(String(request.messages.at(-1)?.content));
+      count += 1;
+      if (count === 1) {
+        current = "second clock";
+        return ok({ message: { content: "", calls: [call] }, finishReason: "tool-calls", usage: {} });
+      }
+      return ok({ message: { content: "done" }, finishReason: "stop", usage: {} });
+    },
+  };
+  const result = await runAgent({ agent: agentWith(model), input: "time?", context: { turn: () => current } }).result;
+  expect(result.status).toBe("completed");
+  expect(seen).toEqual(["first clock", "second clock"]);
+});
+
 test("a model failure ends the run typed, with the outcome on the log", async () => {
   const store = createSqliteStore({ database: new Database(":memory:") });
   const result = await runAgent({
@@ -159,6 +398,42 @@ test("a tool's delivery to another session commits with the run that made it", a
   expect(runnable.value.pending).toEqual([
     { sessionId: "child", input: "go", from: { kind: "session", id: "parent" } },
   ]);
+});
+
+test("one tool's result and deliveries commit before a slower concurrent call finishes", async () => {
+  const store = createSqliteStore({ database: new Database(":memory:") });
+  await store.create({ sessionId: "fast-child", agent: { id: "a", version: "1" } });
+  await store.create({ sessionId: "slow-child", agent: { id: "a", version: "1" } });
+  let releaseSlow!: () => void;
+  const slowGate = new Promise<void>((resolve) => { releaseSlow = resolve; });
+  let fastCommitted!: () => void;
+  const fastGate = new Promise<void>((resolve) => { fastCommitted = resolve; });
+  const send = defineTool({
+    name: "send", description: "send", schema: z.object({ target: z.string() }),
+    annotations: { readOnly: true },
+    execute: async ({ target }, context) => {
+      context.enqueue({ sessionId: target, input: target });
+      if (target === "slow-child") await slowGate;
+      else fastCommitted();
+      return { content: target };
+    },
+  });
+  const calls = [
+    { callId: "slow", name: "send", arguments: JSON.stringify({ target: "slow-child" }) },
+    { callId: "fast", name: "send", arguments: JSON.stringify({ target: "fast-child" }) },
+  ];
+  const run = runAgent({
+    agent: agentWith(createFakeModel([{ calls }, { text: "done" }]), { tools: [send] }),
+    store, sessionId: "parent", input: "send both",
+  });
+  await fastGate;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const fast = await store.read({ sessionId: "fast-child" });
+  const slow = await store.read({ sessionId: "slow-child" });
+  expect(fast.ok && fast.value.pending.map((delivery) => delivery.input)).toEqual(["fast-child"]);
+  expect(slow.ok && slow.value.pending).toEqual([]);
+  releaseSlow();
+  expect((await run.result).status).toBe("completed");
 });
 
 test("a declared turn limit stops the run and says so", async () => {

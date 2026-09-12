@@ -7,6 +7,14 @@ export interface ToolCall {
   callId: string;
   name: string;
   arguments: string;
+  /** The model may continue before this call reports its result. */
+  async?: boolean;
+}
+
+/** Provider-owned continuation data, retained verbatim beside the output that produced it. */
+export interface ProviderState {
+  provider: string;
+  items: readonly JsonValue[];
 }
 
 export interface ToolResult {
@@ -102,14 +110,14 @@ export type Entry =
   | { type: "run.started"; runId: string; input: Content; from?: From }
   | {
       type: "assistant"; runId: string; content: Content;
-      calls?: readonly ToolCall[]; usage?: Usage;
+      calls?: readonly ToolCall[]; usage?: Usage; providerState?: ProviderState;
       /**
        * What produced this turn, when a model did: which model answered and the
        * span it took. `Stored.at` is when the entry was committed, which is a
        * different fact and not a substitute — anything projecting a generation
        * needs both ends of the call, and the commit is neither of them.
        */
-      generation?: { model?: string; startedAt: string; endedAt: string };
+      generation?: { id: string; model?: string; startedAt: string; endedAt?: string };
     }
   | { type: "tool.started"; runId: string; callId: string }
   | { type: "tool.finished"; runId: string; callId: string; result: ToolResult }

@@ -236,7 +236,9 @@ function failed(result: Result<ModelResponse, ModelError>, code: ModelError["cod
 }
 
 const joined = (deltas: readonly ModelDelta[], type: ModelDelta["type"]): string =>
-  deltas.filter((delta) => delta.type === type).map((delta) => "text" in delta ? delta.text : delta.arguments).join("");
+  deltas.filter((delta) => delta.type === type).map((delta) =>
+    "text" in delta ? delta.text : "arguments" in delta ? delta.arguments : "",
+  ).join("");
 
 /** Drains a generation, keeping what it streamed on the way to its result. */
 async function drive(

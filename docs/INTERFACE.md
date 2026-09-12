@@ -29,12 +29,14 @@ boundary:
 
 - **`context.run`** sits inside the cached prefix and is fixed for the run — remembered facts, a
   skill index, a tenant profile.
-- **`context.turn`** sits after it and is for one request — retrieved documents, the clock.
+- **`context.turn`** sits after it and is for one request — retrieved documents, the clock. It may
+  be a function, evaluated when each request is built, so a long activation does not keep the
+  value from its first generation.
 
 This is the seam every memory system reaches the library through, and it is deliberately the only
 one besides tools. Getting the split right is the loop's job because only the loop knows where the
-prefix ends; a fact written mid-run therefore applies from the next run, because rewriting a cached
-prefix invalidates every following turn.
+prefix ends; a run-scoped fact written mid-run therefore applies from the next run, because
+rewriting a cached prefix invalidates every following turn.
 
 ## Keeping a long conversation in budget
 
@@ -108,9 +110,34 @@ says what actually served and `entry.generation.model` records it, which is what
 prices a run from. `effort` stays on the request, because how hard to think is a knob over one call
 rather than part of which model this is.
 
+A configured model that accepts asynchronous client tools says so with `Model.asyncTools: true`.
+The application may then declare an individual `ToolSpec.async`; nothing infers this from a tool's
+read-only annotation or a model name. A completed asynchronous call can arrive before its model
+generation ends. The native harness commits the call and `tool.started` before running it, lets the
+generation continue, and later commits the real result under the original call id. A call still
+running is left open in model context. If the process dies, recovery closes it as unreported and
+does not repeat its effect.
+
+An ordinary synchronous tool still occupies its own execution lane until it returns. Mark work
+asynchronous only when both the selected model and the tool declare that contract; otherwise put
+long independent work in its own session. The runtime does not pretend that partial batch commits
+make one arbitrary blocking function interruptible.
+
+The OpenAI Responses adapter uses the official SDK's persistent WebSocket. One configured model
+reuses that transport across turns and concurrent sessions, with a distinct `stream_id` for each
+generation; every request still carries the durable projected history, so transport reuse is not a
+second conversation store. `openai` and its Node `ws` transport are optional peer dependencies of
+aglib and dependencies of the consuming application. Other subpaths neither load nor require them.
+Its concrete model has `close()` because the application that caches it also owns that connection.
+
+`ModelGeneration.steer` is an optional provider capability. The native harness first commits new
+`turn` input, then offers those user messages to the active generation. Acceptance means the
+provider applied the input to a successor generation. Rejection does not cancel the current
+generation: it finishes, and the durable input is read at the next ordinary model boundary.
+
 ## Waiting for work
 
-`store.watch(watcher)` is an optional interrupt line: it says a session moved and whether it now has
+`store.watch(watcher)` is an optional wake line: it says a session moved and whether it now has
 work owed, and the only correct response is to ask the store what it says now. A caller keeps a
 heartbeat regardless — nothing about a wake is guaranteed except that the change is readable by the
 time it arrives — so the feed buys latency, not certainty. A store with no push channel omits the

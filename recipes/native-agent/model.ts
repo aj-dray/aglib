@@ -1,12 +1,13 @@
 /**
  * Picking a model and a sandbox at the command line.
  *
- * Three providers behind one port: two share the OpenAI wire and differ only by
- * base URL, and Anthropic has its own. A model is a value here, not a name the
- * library resolves — which is why choosing one is choosing which function to
- * call rather than setting a string somewhere.
+ * Three providers behind one port. OpenRouter uses the compatible chat wire,
+ * OpenAI uses its native Responses WebSocket, and Anthropic has its own. A
+ * model is a value here, not a name the library resolves — which is why
+ * choosing one is choosing which function to call rather than setting a string.
  */
-import { createOpenAiCompatibleModel, createOpenRouterModel } from "aglib/model/adapters/openai-compatible";
+import { createOpenAiCompatibleModel } from "aglib/model/adapters/openai-compatible";
+import { createOpenAiResponsesModel } from "aglib/model/adapters/openai-responses";
 import { createAnthropicModel } from "aglib/model/adapters/anthropic";
 import type { Model, ModelRequest } from "aglib/model";
 import type { Sink } from "aglib/render";
@@ -26,7 +27,7 @@ export interface Choice {
 
 const defaultModel: Record<Provider, string> = {
   openrouter: "deepseek/deepseek-v4-flash",
-  openai: "gpt-5-nano",
+  openai: "gpt-6-astra",
   anthropic: "claude-haiku-4-5",
 };
 
@@ -43,9 +44,12 @@ export function createChosenModel(choice: Choice): Model {
 
   if (choice.provider === "anthropic") return createAnthropicModel({ apiKey, model });
   if (choice.provider === "openai") {
-    return createOpenAiCompatibleModel({ apiKey, baseUrl: "https://api.openai.com/v1", model });
+    return createOpenAiResponsesModel({ apiKey, model, asyncTools: true, steering: true });
   }
-  return createOpenRouterModel({ apiKey, model, appName: "aglib-native-agent" });
+  return createOpenAiCompatibleModel({
+    apiKey, model, baseUrl: "https://openrouter.ai/api/v1", effortParameter: "reasoning",
+    headers: { "x-title": "aglib-native-agent" },
+  });
 }
 
 /** `--provider x --model y --effort high --sandbox docker --detail detailed` — the rest is the task. */

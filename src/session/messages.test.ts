@@ -90,12 +90,28 @@ test("a call whose result never committed is closed, not left dangling", () => {
         type: "assistant", runId: "r", content: "", seq: 2, at: "",
         calls: [{ callId: "c1", name: "bash", arguments: "{}" }],
       },
+      { type: "run.finished", runId: "r", outcome: "cancelled", seq: 3, at: "" },
     ],
   });
   const last = messages.at(-1);
   expect(last?.role).toBe("tool");
   expect(last).toMatchObject({ callId: "c1", isError: true });
   expect(String((last as { content: string }).content)).toContain("did not report back");
+});
+
+test("a call in an open activation stays open for a live asynchronous result", () => {
+  const messages = toMessages({
+    instructions: "be useful",
+    entries: [
+      { type: "run.started", runId: "r", input: "go", seq: 1, at: "" },
+      {
+        type: "assistant", runId: "r", content: "", seq: 2, at: "",
+        calls: [{ callId: "c1", name: "bash", arguments: "{}", async: true }],
+      },
+      { type: "tool.started", runId: "r", callId: "c1", seq: 3, at: "" },
+    ],
+  });
+  expect(messages.at(-1)?.role).toBe("assistant");
 });
 
 const arrivals = log(

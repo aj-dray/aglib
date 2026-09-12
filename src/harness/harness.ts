@@ -16,11 +16,11 @@ import type { JsonValue } from "../json.js";
  */
 export type Update =
   | { type: "hook.error"; hook: string; message: string }
-  | { type: "text.delta"; text: string }
-  | { type: "reasoning.delta"; text: string }
+  | { type: "text.delta"; text: string; runId?: string; generationId?: string }
+  | { type: "reasoning.delta"; text: string; runId?: string; generationId?: string }
   | { type: "tool.progress"; callId: string; data: JsonValue }
   /** Arguments arriving a fragment at a time, so a viewer can show a call forming. */
-  | { type: "tool-call.delta"; callId: string; arguments: string }
+  | { type: "tool-call.delta"; callId: string; arguments: string; runId?: string; generationId?: string }
   | { type: "entry"; entry: Stored };
 
 export interface HarnessContext {
@@ -57,7 +57,7 @@ export interface HarnessContext {
    * compare-and-swap means another writer is at this position, and the run is
    * over. Anything the agent was sending with that write goes with it.
    */
-  commit(entries: readonly Entry[]): Promise<void>;
+  commit(entries: readonly Entry[], deliveries?: readonly Delivery[]): Promise<void>;
   /**
    * Fold any waiting input into this activation, and say how much arrived.
    *
@@ -80,6 +80,8 @@ export interface HarnessContext {
    * for long, because the next commit meets it.
    */
   drain?(): Promise<number>;
+  /** Wait until input may be available. A wake is a reason to drain, never the input itself. */
+  waitForInput?(): Promise<void>;
   emit(update: Update): void;
   signal: AbortSignal;
 }
