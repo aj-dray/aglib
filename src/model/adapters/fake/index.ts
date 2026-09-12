@@ -1,4 +1,6 @@
-import type { Model, ModelDelta, ModelError, ModelResponse, ToolCall, Usage } from "../../model.js";
+import type {
+  Model, ModelDelta, ModelError, ModelResponse, ProviderState, ToolCall, Usage,
+} from "../../model.js";
 import { err, ok, type Result } from "../../../result.js";
 
 export interface FakeResponse {
@@ -7,6 +9,7 @@ export interface FakeResponse {
   usage?: Usage;
   /** Which model the provider says answered. Absent, like a provider that does not say. */
   model?: string;
+  providerState?: ProviderState;
   /**
    * Why the turn ended, where the response's own shape cannot say.
    *
@@ -48,6 +51,7 @@ export function createFakeModel(responses: readonly FakeResponse[]): Model {
         finishReason: response.finishReason ?? (response.calls?.length ? "tool-calls" : "stop"),
         usage: response.usage ?? {},
         ...(response.model ? { model: response.model } : {}),
+        ...(response.providerState ? { providerState: response.providerState } : {}),
       });
     },
   };

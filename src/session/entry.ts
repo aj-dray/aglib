@@ -9,6 +9,13 @@ export interface ToolCall {
   arguments: string;
 }
 
+/** Provider-owned continuation data, retained verbatim beside the output that produced it. */
+export interface ProviderState {
+  /** The provider wire allowed to replay these items. */
+  provider: string;
+  items: readonly JsonValue[];
+}
+
 export interface ToolResult {
   content: Content;
   /** Structured channel for the application and the UI. Never reaches the model. */
@@ -102,7 +109,7 @@ export type Entry =
   | { type: "run.started"; runId: string; input: Content; from?: From }
   | {
       type: "assistant"; runId: string; content: Content;
-      calls?: readonly ToolCall[]; usage?: Usage;
+      calls?: readonly ToolCall[]; usage?: Usage; providerState?: ProviderState;
       /**
        * What produced this turn, when a model did: which model answered and the
        * span it took. `Stored.at` is when the entry was committed, which is a

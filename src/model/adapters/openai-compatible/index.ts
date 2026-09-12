@@ -3,6 +3,7 @@ import type {
 } from "../../model.js";
 import { err, ok, type Result } from "../../../result.js";
 import { textOf } from "../../../content.js";
+import type { JsonValue } from "../../../json.js";
 
 export interface OpenAiCompatibleOptions {
   apiKey: string;
@@ -26,6 +27,7 @@ export interface OpenAiCompatibleOptions {
  */
 export function createOpenAiCompatibleModel(options: OpenAiCompatibleOptions): Model {
   const call = options.fetch ?? fetch;
+  const provider = `openai-compatible:${options.baseUrl.replace(/\/+$/, "")}`;
   return {
     id: `openai-compatible:${options.model}`,
 
@@ -41,7 +43,7 @@ export function createOpenAiCompatibleModel(options: OpenAiCompatibleOptions): M
           },
           body: JSON.stringify({
             model: options.model,
-            messages: encodeConversation(request.messages),
+            messages: encodeConversation(request.messages, provider),
             ...(request.tools?.length ? { tools: request.tools.map(encodeTool) } : {}),
             ...(request.maxOutputTokens !== undefined ? { max_tokens: request.maxOutputTokens } : {}),
             ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
@@ -63,6 +65,10 @@ export function createOpenAiCompatibleModel(options: OpenAiCompatibleOptions): M
       let finish: ModelResponse["finishReason"] = "stop";
       let usage: Usage = {};
       let model: string | undefined;
+      const reasoningDetails: JsonValue[] = [];
+      let sawReasoningDetails = false;
+      const reasoning: string[] = [];
+      const reasoningContent: string[] = [];
 
       // A stream that dies mid-body — cancelled, dropped, truncated — must come
       // back as a typed failure like any other. Without this the generator throws,
@@ -83,8 +89,16 @@ export function createOpenAiCompatibleModel(options: OpenAiCompatibleOptions): M
           const content = choice.delta?.content;
           if (content) { text.push(content); yield { type: "text.delta", text: content }; }
 
-          const reasoning = choice.delta?.reasoning;
-          if (reasoning) yield { type: "reasoning.delta", text: reasoning };
+          const reasoningDelta = choice.delta?.reasoning;
+          const reasoningContentDelta = choice.delta?.reasoning_content;
+          if (reasoningDelta !== undefined) reasoning.push(reasoningDelta);
+          if (reasoningContentDelta !== undefined) reasoningContent.push(reasoningContentDelta);
+          const visibleReasoning = reasoningDelta ?? reasoningContentDelta;
+          if (visibleReasoning) yield { type: "reasoning.delta", text: visibleReasoning };
+          if (choice.delta?.reasoning_details !== undefined) {
+            sawReasoningDetails = true;
+            appendReasoningDetails(reasoningDetails, choice.delta.reasoning_details);
+          }
 
           for (const fragment of choice.delta?.tool_calls ?? []) {
             // Providers stream tool arguments in fragments, keyed by position;
@@ -110,11 +124,13 @@ export function createOpenAiCompatibleModel(options: OpenAiCompatibleOptions): M
       const collected: ToolCall[] = [...calls.values()]
         .map((call) => ({ callId: call.callId, name: call.name, arguments: call.arguments || "{}" }));
 
+      const state = reasoningState(reasoningDetails, sawReasoningDetails, reasoning, reasoningContent);
       return ok({
         message: { content: text.join(""), ...(collected.length ? { calls: collected } : {}) },
         finishReason: collected.length && finish === "stop" ? "tool-calls" : finish,
         usage,
         ...(model ? { model } : {}),
+        ...(state.length ? { providerState: { provider, items: state } } : {}),
       });
     },
   };
@@ -145,7 +161,7 @@ function encodeEffort(
   return parameter === "reasoning" ? { reasoning: { effort } } : { reasoning_effort: effort };
 }
 
-function encodeConversation(messages: readonly Message[]): Record<string, unknown>[] {
+function encodeConversation(messages: readonly Message[], provider: string): Record<string, unknown>[] {
   const out: Record<string, unknown>[] = [];
   let images: ContentPart[] = [];
   const flush = () => {
@@ -156,7 +172,7 @@ function encodeConversation(messages: readonly Message[]): Record<string, unknow
     // The wire accepts only text in tool replies. Keep every reply in a parallel
     // batch adjacent before supplying its images as associated user content.
     if (message.role !== "tool") flush();
-    out.push(encodeMessage(message));
+    out.push(encodeMessage(message, provider));
     if (message.role === "tool" && typeof message.content !== "string") {
       const media = message.content.filter((part) => part.type === "image");
       if (media.length) images.push({ type: "text", text: `Images from tool call ${message.callId}:` }, ...media);
@@ -166,7 +182,7 @@ function encodeConversation(messages: readonly Message[]): Record<string, unknow
   return out;
 }
 
-function encodeMessage(message: Message): Record<string, unknown> {
+function encodeMessage(message: Message, provider: string): Record<string, unknown> {
   if (message.role === "tool") {
     return { role: "tool", tool_call_id: message.callId, content: textOf(message.content) };
   }
@@ -174,6 +190,7 @@ function encodeMessage(message: Message): Record<string, unknown> {
     return {
       role: "assistant",
       content: textOf(message.content) || null,
+      ...decodeReasoningState(message, provider),
       ...(message.calls?.length
         ? {
             tool_calls: message.calls.map((call) => ({
@@ -202,6 +219,85 @@ function encodeContent(content: Message["content"]): unknown {
   const only = parts.length === 1 ? parts[0] : undefined;
   return only?.type === "text" ? only.text : parts;
 }
+
+function reasoningState(
+  details: readonly JsonValue[],
+  sawDetails: boolean,
+  reasoning: readonly string[],
+  reasoningContent: readonly string[],
+): JsonValue[] {
+  const state: Record<string, JsonValue> = {};
+  if (sawDetails) state["reasoning_details"] = details;
+  if (!sawDetails && reasoning.length) state["reasoning"] = reasoning.join("");
+  if (!sawDetails && reasoningContent.length) state["reasoning_content"] = reasoningContent.join("");
+  return Object.keys(state).length ? [state] : [];
+}
+
+function decodeReasoningState(message: Extract<Message, { role: "assistant" }>, provider: string) {
+  if (message.providerState?.provider !== provider) return {};
+  const state: Record<string, JsonValue> = {};
+  for (const item of message.providerState.items) {
+    const value = record(item);
+    const details = value?.["reasoning_details"];
+    if (Array.isArray(details)) state["reasoning_details"] = details;
+    for (const field of ["reasoning", "reasoning_content"] as const) {
+      if (typeof value?.[field] === "string") state[field] = value[field];
+    }
+  }
+  return state;
+}
+
+/** Rebuild the complete blocks OpenRouter's chat stream fragments by type. */
+function appendReasoningDetails(target: JsonValue[], incoming: readonly JsonValue[]): void {
+  for (const raw of incoming) {
+    const detail = record(raw);
+    if (!detail) {
+      target.push(clone(raw));
+      continue;
+    }
+    const field = detail?.["type"] === "reasoning.text" ? "text"
+      : detail?.["type"] === "reasoning.summary" ? "summary"
+      : undefined;
+    const previous = record(target.at(-1));
+    if (!field || !previous || previous["type"] !== detail["type"] || !compatible(previous, detail, field)) {
+      target.push(clone(raw));
+      continue;
+    }
+
+    const merged: Record<string, JsonValue> = { ...previous };
+    for (const [key, value] of Object.entries(detail)) {
+      if (key === field) continue;
+      if (value !== null || merged[key] === undefined) merged[key] = value;
+    }
+    merged[field] = `${typeof previous[field] === "string" ? previous[field] : ""}${
+      typeof detail[field] === "string" ? detail[field] : ""
+    }`;
+    target[target.length - 1] = merged;
+  }
+}
+
+function compatible(
+  left: Readonly<Record<string, JsonValue>>,
+  right: Readonly<Record<string, JsonValue>>,
+  payload: string,
+): boolean {
+  const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
+  for (const key of keys) {
+    if (key === payload) continue;
+    const a = left[key];
+    const b = right[key];
+    if (a === undefined || a === null || b === undefined || b === null) continue;
+    if (JSON.stringify(a) !== JSON.stringify(b)) return false;
+  }
+  return true;
+}
+
+const record = (value: JsonValue | undefined): Readonly<Record<string, JsonValue>> | undefined =>
+  value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Readonly<Record<string, JsonValue>>
+    : undefined;
+
+const clone = (value: JsonValue): JsonValue => JSON.parse(JSON.stringify(value)) as JsonValue;
 
 const encodeTool = (tool: ToolSpec) => ({
   type: "function",
@@ -286,6 +382,8 @@ interface ChatFrame {
     delta?: {
       content?: string;
       reasoning?: string;
+      reasoning_content?: string;
+      reasoning_details?: readonly JsonValue[];
       tool_calls?: readonly { index: number; id?: string; function?: { name?: string; arguments?: string } }[];
     };
   }[];

@@ -10,4 +10,4 @@ export type { Agent, AgentRun, Arrival, RunAgentOptions, RunResult } from "./age
 export { defineTool } from "./tools/tool.js";
 export type { Decide, Tool, ToolContext, ToolExecutor } from "./tools/tool.js";
 
-export type { Delivery, Entry, From, Stored, ToolCall, ToolResult, Usage } from "./session/entry.js";
+export type { Delivery, Entry, From, ProviderState, Stored, ToolCall, ToolResult, Usage } from "./session/entry.js";

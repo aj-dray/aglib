@@ -193,6 +193,7 @@ export function defineStoreConformance(subject: StoreUnderTest): readonly Confor
       content: [{ type: "text", text: "here" }, { type: "opaque", provider: "acme", data: { keep: [1, null, "x"] } }],
       calls: [{ callId: "c1", name: "look", arguments: "{\"at\":1}" }],
       usage: { inputTokens: 10, outputTokens: 2 },
+      providerState: { provider: "acme-wire", items: [{ signature: "sig-9" }, "opaque"] },
       generation: { model: "m", startedAt: "2026-01-01T00:00:00.000Z", endedAt: "2026-01-01T00:00:01.000Z" },
     };
     got(await store.append({ sessionId: id("s"), expectedSeq: 0, entries: [rich] }), "append");

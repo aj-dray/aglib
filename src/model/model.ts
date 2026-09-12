@@ -1,5 +1,5 @@
 import type { Content, ContentPart } from "../content.js";
-import type { ToolCall, Usage } from "../session/entry.js";
+import type { ProviderState, ToolCall, Usage } from "../session/entry.js";
 import type { Message } from "../session/messages.js";
 import type { ToolSpec } from "../tools/tool.js";
 import type { Failure, Result } from "../result.js";
@@ -55,6 +55,7 @@ export interface ModelResponse {
   finishReason: "stop" | "tool-calls" | "length" | "refusal";
   usage: Usage;
   model?: string;
+  providerState?: ProviderState;
 }
 
 export interface ModelError extends Failure {
@@ -93,4 +94,4 @@ export async function collect(
  * own them, so the port is the whole of its surface — every one of them appears
  * in a type above, which is what makes this the place to get them.
  */
-export type { ContentPart, Message, ToolCall, ToolSpec, Usage };
+export type { ContentPart, Message, ProviderState, ToolCall, ToolSpec, Usage };
