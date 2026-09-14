@@ -85,7 +85,7 @@ test("a throwing tool becomes an error result, not an escaped exception", async 
   });
   const executor = createExecutor({ tools: [exploding], ...base });
   const outcome = await execute(executor, [call("c1", "boom", {})]);
-  expect(outcome[0]?.result).toEqual({ content: "kaboom", isError: true });
+  expect(outcome[0]?.result).toEqual({ content: "kaboom", isError: true, uncertain: true });
 });
 
 test("concurrent calls report as each finishes and keep their own deliveries", async () => {

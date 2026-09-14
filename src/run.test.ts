@@ -986,3 +986,47 @@ test("a cancelled generation is waited for, not spun on", async () => {
   ]);
   expect(result.status).toBe("cancelled");
 });
+
+
+test("compaction is paid once even when its checkpoint is rejected", async () => {
+  for (const text of ["The user asked to audit the ledger.", ""]) {
+    const store = createSqliteStore({ database: new Database(":memory:") });
+    const model = createFakeModel([{ text: "done", usage: { costUsd: 0.5 } }]);
+    const summary = createFakeModel([{ text, usage: { costUsd: 0.25, inputTokens: 4000 } }]);
+    const run = runAgent({ agent: agentWith(model, { hooks: [createCompactionHook({ model: summary, maxInputTokens: 1000 })] }),
+      store, sessionId: "s", input: "Audit the ledger. ".repeat(1000) });
+    const result = await run.result;
+    expect(result.status).toBe(text ? "completed" : "failed");
+    expect(result.usage.costUsd).toBe(text ? 0.75 : 0.25);
+    const saved = await store.read({ sessionId: "s" });
+    if (!saved.ok) throw new Error("read failed");
+    expect(saved.value.entries.filter(entry => entry.type === "model.finished")).toHaveLength(1);
+    expect(saved.value.entries.filter(entry => entry.type === "assistant")).toHaveLength(text ? 1 : 0);
+    await store.close();
+  }
+});
+
+
+test("recovery records uncertainty without re-executing an unreported effect", async () => {
+  const store = createSqliteStore({ database: new Database(":memory:") });
+  await store.create({ sessionId: "s", agent: { id: "a", version: "1" } });
+  await store.append({ sessionId: "s", expectedSeq: 0, entries: [
+    { type: "run.started", runId: "r", input: "send once" },
+    { type: "assistant", runId: "r", content: "", calls: [call] },
+    { type: "tool.started", runId: "r", callId: call.callId },
+  ] });
+  let effects = 0;
+  let seen = "";
+  const fake = createFakeModel([{ text: "The original effect needs reconciliation." }]);
+  const model: Model = { id: fake.id, generate(request) { seen = JSON.stringify(request.messages); return fake.generate(request); } };
+  const tool = defineTool({ name: call.name, description: "", schema: z.object({}), execute: () => { effects++; return { content: "sent" }; } });
+  const result = await runAgent({ agent: agentWith(model, { tools: [tool] }), store,
+    claim: { sessionId: "s", seq: 3, pending: [], metadata: {} } }).result;
+  expect(result.status).toBe("completed");
+  expect(effects).toBe(0);
+  expect(seen).toContain("new call ID");
+  const saved = await store.read({ sessionId: "s" });
+  if (!saved.ok) throw new Error("read failed");
+  expect(saved.value.entries.find(entry => entry.type === "tool.finished")).toMatchObject({ result: { uncertain: true, isError: true } });
+  await store.close();
+});

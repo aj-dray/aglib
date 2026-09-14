@@ -44,7 +44,7 @@ export function runAgent(options: RunAgentOptions): AgentRun {
   };
 
   async function execute(): Promise<RunResult> {
-    // What this activation consumed. Summed from the `assistant` entries it
+    // What this activation consumed. Summed from the model usage entries it
     // commits rather than reported by the harness, so one answer serves a loop
     // we own and a loop we do not — and so a run that failed still says what it
     // burned on the way there.
@@ -142,7 +142,7 @@ export function runAgent(options: RunAgentOptions): AgentRun {
         // nothing after paying for a generation is the opposite of what
         // `RunResult.usage` promises.
         for (const entry of entries) {
-          if (entry.type === "assistant" && entry.usage) accumulate(usage, entry.usage);
+          if ((entry.type === "assistant" || entry.type === "model.finished") && entry.usage) accumulate(usage, entry.usage);
         }
 
         if (store) {
@@ -470,7 +470,7 @@ function openRunId(entries: readonly Stored[]): string | undefined {
 
 /** Token counts add; unknown stays unknown rather than becoming a zero. */
 function accumulate(total: Usage, turn: Usage): void {
-  for (const key of ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens"] as const) {
+  for (const key of ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "costUsd"] as const) {
     if (turn[key] !== undefined) total[key] = (total[key] ?? 0) + turn[key]!;
   }
 }

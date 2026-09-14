@@ -224,7 +224,7 @@ being expressible where a hop counter only detects one after it forms.
 
 ## Accounting
 
-Token counts belong to the log. Every `assistant` entry carries the `Usage` the provider reported for the generation that produced it, and `runAgent` sums those as it commits them — so what an activation consumed is one fact with one owner, reported on every outcome including the cancelled and failed ones a run that spent real money is most likely to end in.
+Token counts belong to the log. Every `assistant` or auxiliary `model.finished` entry carries the `Usage` the provider reported for the generation that produced it, and `runAgent` sums those as it commits them — so what an activation consumed is one fact with one owner, reported on every outcome including the cancelled and failed ones a run that spent real money is most likely to end in.
 
 A harness reports no total of its own. It used to, and that was a second answer to a question the log already answers: three harnesses each computing it, one of them able to compute nothing, and all of them losing it the moment a run was interrupted.
 

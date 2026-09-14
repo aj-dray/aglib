@@ -1,6 +1,6 @@
 import type { HarnessContext, LifecycleHook } from "../../harness.js";
 import { foldedThrough, toMessages } from "../../../session/messages.js";
-import type { Model, Message, ModelError } from "../../../model/model.js";
+import type { Model, Message, ModelError, ModelResponse } from "../../../model/model.js";
 import type { Stored } from "../../../session/entry.js";
 import { collect } from "../../../model/model.js";
 import { ok, err, type Result } from "../../../result.js";
@@ -95,6 +95,7 @@ export async function summarize(input: {
   messages: readonly Message[];
   prompt?: (messages: readonly Message[]) => string;
   signal?: AbortSignal;
+  record?(response: ModelResponse): Promise<void>;
 }): Promise<Result<string, ModelError>> {
   const outcome = await collect(input.model.generate({
     messages: [{ role: "user", content: (input.prompt ?? summaryPrompt)(input.messages) }],
@@ -102,6 +103,7 @@ export async function summarize(input: {
     ...(input.signal ? { signal: input.signal } : {}),
   }));
   if (!outcome.ok) return outcome;
+  await input.record?.(outcome.value);
   if (outcome.value.finishReason !== "stop" || outcome.value.message.calls?.length) {
     return err({ code: "failed", message: "Compaction did not finish; the original history is unchanged.", retryable: false });
   }
@@ -124,8 +126,15 @@ export function createCompactionHook(options: {
       if (cut === undefined || cut <= foldedThrough(entries)) {
         return { code: "context-overflow", message: "Context exceeds the compaction budget with no safe prefix to fold.", retryable: false };
       }
+      const startedAt = new Date().toISOString();
       const summary = await summarize({
         model: options.model,
+        record: async response => {
+          await context.commit([{ type: "model.finished", runId: context.runId, purpose: "compaction",
+            generation: { id: crypto.randomUUID(), ...(response.model ? { model: response.model } : {}), startedAt, endedAt: new Date().toISOString() },
+            usage: response.usage,
+          }]);
+        },
         messages: toMessages({ instructions: context.instructions, entries: entries.filter(entry => entry.seq <= cut || entry.type === "summary") }),
         ...(options.prompt ? { prompt: options.prompt } : {}),
         signal: context.signal,

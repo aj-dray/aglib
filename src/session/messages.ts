@@ -102,7 +102,7 @@ export function toMessages(input: {
           if (answered.has(`${entry.runId}\u0000${call.callId}`) || !closed.has(entry.runId)) continue;
           messages.push({
             role: "tool", callId: call.callId, isError: true,
-            content: "This call did not report back: the activation ended before its result was committed.",
+            content: "This call did not report back: the activation ended before its result was committed. Its effect is unknown. Reconcile the original action before retrying, including under a new call ID.",
           });
         }
         break;
@@ -111,7 +111,11 @@ export function toMessages(input: {
         messages.push({
           role: "tool",
           callId: entry.callId,
-          content: entry.result.content,
+          content: entry.result.uncertain
+            ? typeof entry.result.content === "string"
+              ? `Effect unknown. Reconcile the original action before retrying, including under a new call ID.\n${entry.result.content}`
+              : [{ type: "text", text: "Effect unknown. Reconcile the original action before retrying, including under a new call ID." }, ...entry.result.content]
+            : entry.result.content,
           ...(entry.result.isError ? { isError: true } : {}),
         });
         break;

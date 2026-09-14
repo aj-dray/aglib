@@ -23,6 +23,8 @@ export interface ToolResult {
   /** Structured channel for the application and the UI. Never reaches the model. */
   details?: JsonValue;
   isError?: boolean;
+  /** Execution began but its effect is unknown; reconcile before issuing it again. */
+  uncertain?: true;
 }
 
 /**
@@ -120,6 +122,7 @@ export type Entry =
        */
       generation?: { id: string; model?: string; startedAt: string; endedAt?: string };
     }
+  | { type: "model.finished"; runId: string; purpose: string; generation: { id: string; model?: string; startedAt: string; endedAt: string }; usage?: Usage }
   | { type: "tool.started"; runId: string; callId: string }
   | { type: "tool.finished"; runId: string; callId: string; result: ToolResult }
   /** Compaction output. `replaces` is the seq up to which entries are folded; nothing is deleted. */
