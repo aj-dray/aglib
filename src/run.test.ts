@@ -8,7 +8,7 @@ import { createNativeHarness } from "./harness/adapters/native/loop.js";
 import { createFakeModel } from "./model/adapters/fake/index.js";
 import { createSqliteStore } from "./store/adapters/sqlite.js";
 import { textOf } from "./content.js";
-import { ok } from "./result.js";
+import { err, ok } from "./result.js";
 import type { Agent } from "./agent.js";
 import type { Message, Model, ModelRequest } from "./model/model.js";
 
@@ -955,4 +955,34 @@ test("native text streaming retains provider phases without relabelling reasonin
   expect(streamed).toEqual([
     ["Checking", "commentary"], ["Available", "final_answer"], ["Unphased", undefined],
   ]);
+});
+
+test("a cancelled generation is waited for, not spun on", async () => {
+  // The trap this closes: after `cancel()`, `waitForInput` answered at once
+  // and `drain` folded nothing, so the generation loop raced them against the
+  // model's next delta in a microtask loop that never yielded — every turn
+  // added a reaction to the still-pending delta, and a provider slow to honour
+  // the abort saw the process eat memory until it was killed. A model that
+  // honours the abort only on a timer is the proof: under the spin the timer
+  // never fires and the run never ends.
+  const store = createSqliteStore({ database: new Database(":memory:") });
+  await store.create({ sessionId: "s", agent: { id: "a", version: "1" } });
+  const slow: Model = {
+    id: "slow",
+    async *generate({ signal }) {
+      await new Promise<void>((resolve) => {
+        if (signal?.aborted) return resolve();
+        signal?.addEventListener("abort", () => setTimeout(resolve, 50), { once: true });
+      });
+      return err({ code: "cancelled", message: "Generation cancelled", retryable: false });
+    },
+  };
+  const run = runAgent({ agent: agentWith(slow), store, key: "k", input: "hi" });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  run.cancel();
+  const result = await Promise.race([
+    run.result,
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("the run never ended: the loop is spinning")), 2_000)),
+  ]);
+  expect(result.status).toBe("cancelled");
 });
