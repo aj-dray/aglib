@@ -155,13 +155,14 @@ test.each([
   { name: "tool call", response: { text: "I will continue", calls: [{ callId: "unexpected", name: "send", arguments: "{}" }] } },
   { name: "nonshrinking", response: { text: "larger checkpoint ".repeat(500) } },
   { name: "still over budget", response: { text: "smaller but oversized ".repeat(100) } },
-])("$name summary fails without committing or changing history", async ({ response }) => {
+])("$name summary preserves history and records its paid attempt", async ({ response }) => {
   const context = contextFor(largeExchange());
   const before = context.entries();
-  const hook = createCompactionHook({ maxInputTokens: 300, model: createFakeModel([response]) });
+  const hook = createCompactionHook({ maxInputTokens: 300, model: createFakeModel([{ ...response, usage: { costUsd: 0.25 } }]) });
   const failure = await hook.beforeModel!(context);
   expect(failure).toMatchObject({ retryable: false });
-  expect(context.entries()).toEqual(before);
+  expect(context.entries().filter(entry => entry.type !== "model.finished")).toEqual(before);
+  expect(context.entries().at(-1)).toMatchObject({ type: "model.finished", purpose: "compaction", usage: { costUsd: 0.25 } });
   expect(context.history()).toEqual(toMessages({ instructions: "i", entries: before }));
 });
 

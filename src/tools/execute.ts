@@ -91,7 +91,7 @@ export function createExecutor(input: {
             };
             try { return { result: await prepared.value.run(context), deliveries }; }
             catch (error) {
-              return { result: failed(error instanceof Error ? error.message : String(error)), deliveries };
+              return { result: { ...failed(error instanceof Error ? error.message : String(error)), uncertain: true }, deliveries };
             }
           },
         });

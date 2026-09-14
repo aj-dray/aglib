@@ -60,7 +60,7 @@ by the hook's explicit `model`. Its short checkpoint preserves instructions, evi
 
 ## What a run consumed
 
-A run answers with `usage` on every outcome, because a run that burned a thousand tokens and then failed burned them. It is summed from the `assistant` entries the activation committed, so a harness reports no total of its own and a cancelled run still says what it cost.
+A run answers with `usage` on every outcome, because a run that burned a thousand tokens and then failed burned them. It is summed from the `assistant` and `model.finished` entries the activation committed, so a harness reports no total of its own and a cancelled run still says what it cost.
 
 `Usage.costUsd` comes with them where the provider states a cost — OpenRouter does, on every
 response — because that is an observation like the counts beside it, and no table an application
@@ -232,3 +232,7 @@ Diagnostic, audit and secret-bearing detail stays in a tool result's `details`, 
 model-visible content.
 
 Permission decisions see validated arguments when each call reaches its execution slot, after preceding sequential calls finish. Cancellation while a decision is pending prevents execution. Applications still enforce consequential authority atomically at the resource boundary; a callback does not lock external state.
+
+Tool results may carry `uncertain: true` when execution began but its effect is not known. A thrown tool and an interrupted call are uncertain, not evidence that nothing happened. The model reads that it must reconcile the original action before retrying, including under a new call ID; the executor never automatically repeats it. A definitive refusal remains an ordinary error. This records knowledge, not exactly-once execution of arbitrary tools.
+
+Auxiliary model calls are `model.finished` entries with a purpose, generation identity and provider usage. They count toward run usage without becoming assistant messages or consuming a conversational turn. Compaction records its returned usage even when the resulting summary is rejected; providers that return no usage leave it unknown. Applications may record their own auxiliary calls using the same entry.

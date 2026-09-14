@@ -79,6 +79,7 @@ export function createNativeHarness(options: NativeHarnessOptions): Harness {
           result: {
             content: "This call did not report back: the activation ended before its result was committed.",
             isError: true,
+            uncertain: true,
           },
         })));
       }

@@ -155,3 +155,13 @@ test("unasked, an arrival is the input and nothing else", () => {
   const first = arrivals[0];
   expect(first?.type === "run.started" && first.from).toEqual({ kind: "session", id: "scout" });
 });
+
+
+test("uncertain effects retain images and tell the model to reconcile before a new call", () => {
+  const image = { type: "image" as const, data: "abc", mediaType: "image/png" };
+  const messages = toMessages({ instructions: "i", entries: log(
+    { type: "tool.finished", runId: "r", callId: "c", result: { content: [image], isError: true, uncertain: true } },
+  ) });
+  expect(JSON.stringify(messages)).toContain("new call ID");
+  expect(messages.at(-1)?.content).toContainEqual(image);
+});
