@@ -135,14 +135,21 @@ export function createNativeHarness(options: NativeHarnessOptions): Harness {
         }
       };
 
+      // Input is raced only while it can still be folded in. After an abort,
+      // `waitForInput` answers at once and `drain` folds nothing, and racing
+      // them again is a microtask loop that never yields: every turn adds a
+      // reaction to the pending delta, and a provider slow to honour the abort
+      // sees the process eat memory until it is killed.
+      const inputArm = () => context.waitForInput && !context.signal.aborted
+        ? [context.waitForInput().then(() => ({ type: "input" as const }))]
+        : [];
+
       /** Wait for one background result or newly delivered input. */
       const waitForWork = async (): Promise<void> => {
         for (;;) {
           const event = await Promise.race([
             firstPending().then((value) => ({ type: "tool" as const, value })),
-            ...(context.waitForInput
-              ? [context.waitForInput().then(() => ({ type: "input" as const }))]
-              : []),
+            ...inputArm(),
           ]);
           if (event.type === "tool") {
             if (pending.has(event.value.callId)) await finish(event.value.completion);
@@ -193,9 +200,7 @@ export function createNativeHarness(options: NativeHarnessOptions): Harness {
             ...([...pending.entries()].map(async ([callId, completion]) => ({
               type: "tool" as const, value: { callId, completion: await completion },
             }))),
-            ...(context.waitForInput
-              ? [context.waitForInput().then(() => ({ type: "input" as const }))]
-              : []),
+            ...inputArm(),
             ...([...steering].map(async (promise) => ({
               type: "steer" as const, promise, value: await promise,
             }))),
