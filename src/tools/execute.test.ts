@@ -119,3 +119,30 @@ test("concurrent calls report as each finishes and keep their own deliveries", a
     expect(second.value.deliveries.map((delivery) => delivery.sessionId)).toEqual(["slow"]);
   }
 });
+
+
+test("a prior sequential call can revoke authority for the next call", async () => {
+  let allowed = true;
+  let effects = 0;
+  const revoke = defineTool({ name: "revoke", description: "", schema: z.object({}),
+    execute: () => { allowed = false; return { content: "revoked" }; } });
+  const act = defineTool({ name: "act", description: "", schema: z.object({}),
+    execute: () => { effects++; return { content: "acted" }; } });
+  const executor = createExecutor({ tools: [revoke, act], ...base,
+    decide: () => allowed ? { action: "execute" } : { action: "reject", message: "revoked" } });
+  const results = await execute(executor, [call("1", "revoke", {}), call("2", "act", {})]);
+  expect(effects).toBe(0);
+  expect(results[1]?.result.isError).toBe(true);
+});
+
+test("cancellation while authority is checked prevents the effect", async () => {
+  const controller = new AbortController();
+  let effects = 0;
+  const act = defineTool({ name: "act", description: "", schema: z.object({}),
+    execute: () => { effects++; return { content: "acted" }; } });
+  const executor = createExecutor({ tools: [act], ...base,
+    decide: async () => { controller.abort(); return { action: "execute" }; } });
+  const results = await Array.fromAsync(executor.execute({ calls: [call("1", "act", {})], signal: controller.signal }));
+  expect(effects).toBe(0);
+  expect(results[0]?.result.isError).toBe(true);
+});

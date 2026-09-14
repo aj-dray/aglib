@@ -60,25 +60,24 @@ export function createExecutor(input: {
         const prepared = tool.prepare(raw);
         if (!prepared.ok) { planned.push(settled(prepared.error)); continue; }
 
-        // Decisions always see parsed, schema-valid arguments — never the raw
-        // string, and never before validation.
-        const decision = input.decide
-          ? await input.decide({
-              tool: tool.spec, input: prepared.value.input,
-              sessionId: input.sessionId, runId: input.runId, callId: call.callId,
-            })
-          : { action: "execute" as const };
-
-        if (decision.action === "reject") {
-          planned.push(settled(failed(`Tool use denied: ${decision.message}`)));
-          continue;
-        }
-
         const annotations = tool.spec.annotations;
         planned.push({
           callId: call.callId,
           concurrent: annotations?.readOnly === true && annotations.sequential !== true,
           run: async () => {
+            // Earlier calls may revoke authority. Decide only when this call
+            // reaches its execution slot, never while planning the batch.
+            const decision = input.decide
+              ? await input.decide({
+                  tool: tool.spec, input: prepared.value.input,
+                  sessionId: input.sessionId, runId: input.runId, callId: call.callId,
+                })
+              : { action: "execute" as const };
+            if (decision.action === "reject") {
+              return { result: failed(`Tool use denied: ${decision.message}`), deliveries: [] };
+            }
+            // A decision may wait on an external authority service.
+            if (signal?.aborted) return { result: failed("Tool use cancelled"), deliveries: [] };
             const deliveries: Delivery[] = [];
             const context: ToolContext = {
               sessionId: input.sessionId, runId: input.runId, callId: call.callId,

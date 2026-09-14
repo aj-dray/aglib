@@ -230,3 +230,5 @@ The agent is told only what the selected harness and environment actually suppor
 structured, not a sentence it must interpret. Context arrives through the explicit slots above.
 Diagnostic, audit and secret-bearing detail stays in a tool result's `details`, which never reaches
 model-visible content.
+
+Permission decisions see validated arguments when each call reaches its execution slot, after preceding sequential calls finish. Cancellation while a decision is pending prevents execution. Applications still enforce consequential authority atomically at the resource boundary; a callback does not lock external state.
