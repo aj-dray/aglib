@@ -1,19 +1,24 @@
 /**
  * Picking a model and a sandbox at the command line.
  *
- * Three providers behind one port. OpenRouter uses the compatible chat wire,
- * OpenAI uses its native Responses WebSocket, and Anthropic has its own. A
- * model is a value here, not a name the library resolves — which is why
- * choosing one is choosing which function to call rather than setting a string.
+ * Four providers behind one port. OpenRouter has a constructor of its own
+ * because the gateway carries rules the generic wire does not — breakpoints for
+ * the Claude models that cache nothing without one, and a wait on the 402 it
+ * answers while the account's other requests are still in flight. `compatible`
+ * is the generic wire for an endpoint you name yourself: Together, Groq, vLLM,
+ * Ollama, anything speaking chat completions at a base URL. OpenAI uses its
+ * native Responses WebSocket, and Anthropic has its own wire. A model is a
+ * value here, not a name the library resolves — which is why choosing one is
+ * choosing which function to call rather than setting a string.
  */
-import { createOpenAiCompatibleModel } from "aglib/model/adapters/openai-compatible";
+import { createOpenAiCompatibleModel, createOpenRouterModel } from "aglib/model/adapters/openai-compatible";
 import { createOpenAiResponsesModel } from "aglib/model/adapters/openai-responses";
 import { createAnthropicModel } from "aglib/model/adapters/anthropic";
 import type { Model, ModelRequest } from "aglib/model";
 import type { Sink } from "aglib/render";
 import { sandboxKinds, type SandboxKind } from "./sandbox.ts";
 
-export const providers = ["openrouter", "openai", "anthropic"] as const;
+export const providers = ["openrouter", "openai", "anthropic", "compatible"] as const;
 export type Provider = (typeof providers)[number];
 
 export interface Choice {
@@ -29,13 +34,20 @@ const defaultModel: Record<Provider, string> = {
   openrouter: "deepseek/deepseek-v4-flash",
   openai: "gpt-6-astra",
   anthropic: "claude-haiku-4-5",
+  // A name the endpoint decides the meaning of: a self-hosted server answers
+  // for whatever it loaded, so `--model` is how you say which.
+  compatible: "default",
 };
 
 const keyFor: Record<Provider, string> = {
   openrouter: "OPENROUTER_API_KEY",
   openai: "OPENAI_API_KEY",
   anthropic: "ANTHROPIC_API_KEY",
+  compatible: "OPENAI_COMPATIBLE_API_KEY",
 };
+
+/** Where the generic wire points. Only `compatible` has to be told; the others are fixed by who they are. */
+const baseUrlVariable = "OPENAI_COMPATIBLE_BASE_URL";
 
 export function createChosenModel(choice: Choice): Model {
   const apiKey = process.env[keyFor[choice.provider]];
@@ -46,10 +58,14 @@ export function createChosenModel(choice: Choice): Model {
   if (choice.provider === "openai") {
     return createOpenAiResponsesModel({ apiKey, model, asyncTools: true, steering: true });
   }
-  return createOpenAiCompatibleModel({
-    apiKey, model, baseUrl: "https://openrouter.ai/api/v1", effortParameter: "reasoning",
-    headers: { "x-title": "aglib-native-agent" },
-  });
+  if (choice.provider === "compatible") {
+    const baseUrl = process.env[baseUrlVariable];
+    if (!baseUrl) throw new Error(`${baseUrlVariable} is not set (needed for --provider compatible)`);
+    // No reasoning dialect is sent: which spelling an unnamed endpoint takes,
+    // if any, is not something this recipe can know, and the wrong one is a 400.
+    return createOpenAiCompatibleModel({ apiKey, baseUrl, model, effortParameter: "none" });
+  }
+  return createOpenRouterModel({ apiKey, model, appName: "aglib-native-agent" });
 }
 
 /** `--provider x --model y --effort high --sandbox docker --detail detailed` — the rest is the task. */
