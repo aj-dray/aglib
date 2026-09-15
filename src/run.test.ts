@@ -25,6 +25,29 @@ const agentWith = (model: Model, over: Partial<Agent> = {}): Agent => ({
 
 const call = { callId: "c1", name: "read_ledger", arguments: "{}" };
 
+test.each([undefined, "The clock for this request"])("the cache boundary advances through tool results, excluding turn context: %s", async (turn) => {
+  const requests: ModelRequest[] = [];
+  const fake = createFakeModel([{ calls: [call] }, { text: "The balance is 1250." }]);
+  const model: Model = {
+    id: fake.id,
+    generate(request) {
+      requests.push(request);
+      return fake.generate(request);
+    },
+  };
+  const result = await runAgent({
+    agent: agentWith(model), input: "balance?", context: { run: "The ledger belongs to this firm.", ...(turn ? { turn } : {}) },
+  }).result;
+  expect(result.status).toBe("completed");
+  expect(requests).toHaveLength(2);
+  const [first, next] = requests;
+  expect(first!.cacheAfter).toBe(first!.messages.length - (turn ? 1 : 0));
+  expect(next!.cacheAfter).toBe(next!.messages.length - (turn ? 1 : 0));
+  expect(next!.cacheAfter).toBeGreaterThan(first!.cacheAfter!);
+  expect(next!.messages[next!.cacheAfter! - 1]).toMatchObject({ role: "tool", content: "1250" });
+  if (turn) expect(next!.messages[next!.cacheAfter!]).toEqual({ role: "system", content: turn });
+});
+
 test("a tool round trip is recorded in full, in order", async () => {
   const store = createSqliteStore({ database: new Database(":memory:") });
   const run = runAgent({

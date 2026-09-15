@@ -174,9 +174,9 @@ export function createNativeHarness(options: NativeHarnessOptions): Harness {
         // the active generation can continue independently of them.
         resultsForNextRequest = false;
 
-        // One cache mark, at the end of the system prefix: instructions plus
-        // run-scoped context, which are fixed for the life of the run.
-        const cacheAfter = history.findIndex((message) => message.role !== "system");
+        // The projection appends volatile turn context as its final system
+        // message. Everything before it, including tool results, can be reused.
+        const cacheAfter = history.length - (history.at(-1)?.role === "system" ? 1 : 0);
         const generationId = crypto.randomUUID();
         const startedAt = new Date().toISOString();
         const generation = options.model.generate({
