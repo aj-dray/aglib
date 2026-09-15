@@ -4,6 +4,7 @@ import type {
 import { err, ok, type Result } from "../../../result.js";
 import { textOf } from "../../../content.js";
 import type { JsonValue } from "../../../json.js";
+import { isWaitStatus, retrying } from "../../retry.js";
 
 export interface AnthropicOptions {
   apiKey: string;
@@ -39,7 +40,7 @@ export interface AnthropicOptions {
  *   request rather than silently having its cache invalidated every turn.
  */
 export function createAnthropicModel(options: AnthropicOptions): Model {
-  const call = options.fetch ?? fetch;
+  const call = retrying(options.fetch ?? fetch);
   const baseUrl = options.baseUrl ?? "https://api.anthropic.com/v1";
   const provider = `anthropic-messages:${baseUrl.replace(/\/+$/, "")}:${options.model}`;
 
@@ -292,18 +293,24 @@ const decodeUsage = (usage: AnthropicUsage | undefined): Usage => usage ? {
   ...(usage.cache_creation_input_tokens !== undefined ? { cacheWriteTokens: usage.cache_creation_input_tokens } : {}),
 } : {};
 
+/**
+ * A refusal, or a wait the retries did not outlast. The second keeps a
+ * retryable code: the provider never said the request was wrong, and a caller
+ * with the time to try again later is told so.
+ */
 async function httpError(response: Response): Promise<ModelError> {
+  const wait = isWaitStatus(response.status);
   const body = await response.text().catch(() => "");
   const code: ModelError["code"] =
     response.status === 401 || response.status === 403 ? "auth"
-    : response.status === 429 ? "rate-limit"
     : response.status === 400 && /prompt is too long|context/i.test(body) ? "context-length"
-    : response.status >= 500 ? "provider"
+    : response.status === 429 ? "rate-limit"
+    : wait ? "provider"
     : "failed";
   return {
     code,
     message: `${response.status} ${response.statusText}${body ? `: ${body.slice(0, 400)}` : ""}`,
-    retryable: code === "rate-limit" || code === "provider",
+    retryable: wait,
   };
 }
 

@@ -8,8 +8,17 @@ subagents it hands work to, and a choice of where commands run.
 bun run recipe native-agent                     # a conversation
 bun run recipe native-agent "what did I decide about pricing?"
 bun run recipe native-agent --sandbox docker --detail detailed "check the disk usage"
+bun run recipe native-agent --provider compatible --model llama3 "summarize ~/notes"
 echo "how many sessions do I have?" | bun run recipe native-agent > answer.txt
 ```
+
+`--provider` is `openrouter` (the default, `OPENROUTER_API_KEY`), `openai` (`OPENAI_API_KEY`),
+`anthropic` (`ANTHROPIC_API_KEY`) or `compatible`: any endpoint speaking chat completions, at
+`OPENAI_COMPATIBLE_BASE_URL` with `OPENAI_COMPATIBLE_API_KEY`, where `--model` is whatever that
+endpoint calls what it serves. OpenRouter is not `compatible` with a fixed URL: the gateway has a
+constructor of its own because it carries rules the generic wire does not — cache breakpoints for
+the Claude models that cache nothing without one, and a wait on the 402 it answers while the
+account's other requests are in flight.
 
 **What this shows.** The whole library surface in one program — the log, compaction, tools, the
 sandbox, and the queue that carries work between sessions — plus the one thing only our own loop can

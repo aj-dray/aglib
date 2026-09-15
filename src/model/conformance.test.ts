@@ -1,13 +1,14 @@
 import { test } from "bun:test";
 import { defineModelConformance, type Answering, type ModelScript, type ModelUnderTest, type SentRequest } from "./conformance.js";
 import { createAnthropicModel } from "./adapters/anthropic/index.js";
-import { createOpenAiCompatibleModel } from "./adapters/openai-compatible/index.js";
+import { createOpenAiCompatibleModel, createOpenRouterModel } from "./adapters/openai-compatible/index.js";
 import { createFakeModel, type FakeResponse } from "./adapters/fake/index.js";
 import type { Model, ToolCall } from "./model.js";
 import type { JsonValue } from "../json.js";
 
 /**
- * The three implementations, held to one contract.
+ * The three implementations, and the router built on one of them, held to one
+ * contract.
  *
  * Each subject renders the suite's scripts onto what it actually speaks and —
  * where there is a wire — reads the outgoing request back out of it. That
@@ -60,7 +61,12 @@ function scripted(wire: {
       // it, an adapter that forgot to forward the signal would pass.
       if (signal?.aborted) throw abandoned();
       if (script.kind === "status") {
-        return new Response(script.body, { status: script.status, statusText: "Scripted" });
+        // A status that is a wait is retried before it is reported, and a
+        // scripted provider answers the same way every time. Saying "now" is
+        // what keeps a case from waiting out a backoff schedule to learn that.
+        return new Response(script.body, {
+          status: script.status, statusText: "Scripted", headers: { "retry-after": "0" },
+        });
       }
       return new Response(sse(wire.frames(script), script.kind === "cut", signal ?? undefined), { status: 200 });
     }) as unknown as typeof fetch;
@@ -241,10 +247,20 @@ function openAiFrames(script: ModelScript): readonly unknown[] {
             // adapter has to recover the split, and the case compares what it
             // recovered against what was asked for.
             ...(script.usage.inputTokens !== undefined
-              ? { prompt_tokens: script.usage.inputTokens + (script.usage.cacheReadTokens ?? 0) } : {}),
+              ? {
+                  prompt_tokens: script.usage.inputTokens
+                    + (script.usage.cacheReadTokens ?? 0) + (script.usage.cacheWriteTokens ?? 0),
+                }
+              : {}),
             ...(script.usage.outputTokens !== undefined ? { completion_tokens: script.usage.outputTokens } : {}),
-            ...(script.usage.cacheReadTokens !== undefined
-              ? { prompt_tokens_details: { cached_tokens: script.usage.cacheReadTokens } } : {}),
+            ...(script.usage.cacheReadTokens !== undefined || script.usage.cacheWriteTokens !== undefined
+              ? {
+                  prompt_tokens_details: {
+                    ...(script.usage.cacheReadTokens !== undefined ? { cached_tokens: script.usage.cacheReadTokens } : {}),
+                    ...(script.usage.cacheWriteTokens !== undefined ? { cache_write_tokens: script.usage.cacheWriteTokens } : {}),
+                  },
+                }
+              : {}),
           },
         },
         "[DONE]",
@@ -306,13 +322,14 @@ function openAiSent(raw: string): SentRequest {
     ...(body.max_tokens !== undefined ? { maxOutputTokens: body.max_tokens } : {}),
     ...(body.temperature !== undefined ? { temperature: body.temperature } : {}),
     ...(effort !== undefined ? { effort } : {}),
-    // Nothing to mark: this wire caches by itself, and the port's boundary has
-    // no field to land in.
-    cacheMarks: 0,
+    // Wherever it landed, as on the Anthropic wire: an endpoint told how to
+    // spell a breakpoint puts one on a text part, and one that was not marks
+    // nothing at all.
+    cacheMarks: raw.match(/"cache_control"/g)?.length ?? 0,
   };
 }
 
-// ---- The three subjects ---------------------------------------------------
+// ---- The subjects ---------------------------------------------------------
 
 const subjects: readonly (readonly [string, ModelUnderTest])[] = [
   ["fake", {
@@ -354,6 +371,19 @@ const subjects: readonly (readonly [string, ModelUnderTest])[] = [
     // `usage.cost` where the endpoint sends one — OpenRouter does, on every
     // response; plain OpenAI and the self-hosted endpoints on this wire do not,
     // and there it stays absent.
+    cost: "reported",
+  }],
+  ["openrouter", {
+    answering: scripted({
+      frames: openAiFrames,
+      build: (call) => createOpenRouterModel({ apiKey: "k", model: "anthropic/claude-opus-5", fetch: call }),
+      report: openAiSent,
+    }),
+    // The same wire, held to one more promise: a Claude served here caches
+    // nothing without a breakpoint, so the boundary the caller ends is marked.
+    wire: { effort: "sent", temperature: "sent", cache: "sent" },
+    toolArguments: "streamed",
+    reasoning: "streamed",
     cost: "reported",
   }],
 ];

@@ -9,9 +9,11 @@ import type { Message } from "../../../session/messages.js";
  * The contract every implementation answers — one result, typed failures,
  * cancellation, tool arguments that parse, what the request carried — lives in
  * `src/model/conformance.ts` and runs against this adapter there. What is left
- * here is this wire's own: which of the two reasoning dialects it speaks, and
- * where OpenRouter points. Sending both dialects is not compatibility, because
- * OpenAI rejects the request outright, so the choice has to be exercised.
+ * here is this wire's own: which of the two reasoning dialects it speaks,
+ * where OpenRouter points, where a breakpoint lands for the models that need
+ * one, and which of OpenRouter's two 402s is a wait. Sending both dialects is
+ * not compatibility, because OpenAI rejects the request outright, so the
+ * choice has to be exercised.
  */
 
 const answered = (): ReadableStream<Uint8Array> => {
@@ -284,4 +286,189 @@ test("tool images reach the model after all parallel replies with their call ass
     { type: "text", text: "Images from tool call last:" },
     { type: "image_url", image_url: { url: "data:image/png;base64,cGl4ZWw=" } },
   ] });
+});
+
+// ---- Cache breakpoints ----------------------------------------------------
+
+const prefixed: readonly Message[] = [
+  { role: "system", content: "You are a bookkeeper." },
+  { role: "system", content: "Remembered: the ledger closes Friday." },
+  { role: "user", content: "What is the balance?" },
+  { role: "assistant", content: "1250." },
+  { role: "user", content: "Thanks." },
+];
+
+const marks = (body: Record<string, unknown>): number =>
+  JSON.stringify(body).match(/"cache_control"/g)?.length ?? 0;
+
+/**
+ * The same three places the Anthropic adapter marks, spelled as that wire's
+ * `cache_control` on a text part, because a Claude served through OpenRouter
+ * caches nothing without one.
+ */
+test("OpenRouter marks a Claude's prefix at its head and at its end, and nowhere between", async () => {
+  const { fetch, sent } = capturing();
+  const model = createOpenRouterModel({ apiKey: "k", model: "anthropic/claude-opus-5", fetch });
+  await collect(model.generate({ messages: prefixed, cacheAfter: 2 }));
+
+  const messages = sent[0]!.body["messages"] as { role: string; content: unknown }[];
+  expect(messages[0]!.content).toEqual([
+    { type: "text", text: "You are a bookkeeper.", cache_control: { type: "ephemeral" } },
+  ]);
+  expect(messages[1]!.content).toEqual([
+    { type: "text", text: "Remembered: the ledger closes Friday.", cache_control: { type: "ephemeral" } },
+  ]);
+  // Past the boundary, content stays the bare string the wire takes.
+  expect(messages[2]!.content).toBe("What is the balance?");
+  expect(marks(sent[0]!.body)).toBe(2);
+});
+
+test("a boundary past the system run marks the message it ends on as well", async () => {
+  const { fetch, sent } = capturing();
+  const model = createOpenRouterModel({ apiKey: "k", model: "anthropic/claude-opus-5", fetch });
+  await collect(model.generate({ messages: prefixed, cacheAfter: 3 }));
+
+  const messages = sent[0]!.body["messages"] as { content: unknown }[];
+  expect(messages[2]!.content).toEqual([
+    { type: "text", text: "What is the balance?", cache_control: { type: "ephemeral" } },
+  ]);
+  expect(marks(sent[0]!.body)).toBe(3);
+});
+
+test("a single system message carries one breakpoint, not two", async () => {
+  const { fetch, sent } = capturing();
+  const model = createOpenRouterModel({ apiKey: "k", model: "anthropic/claude-haiku-4.5", fetch });
+  await collect(model.generate({ messages: prefixed.slice(1), cacheAfter: 1 }));
+  expect(marks(sent[0]!.body)).toBe(1);
+});
+
+test("no breakpoint is sent to a model that caches by itself, or to an endpoint with no field for one", async () => {
+  const builders = [
+    (fetch: typeof globalThis.fetch) => createOpenRouterModel({ apiKey: "k", model: "deepseek/deepseek-v4-flash", fetch }),
+    (fetch: typeof globalThis.fetch) => createOpenAiCompatibleModel({
+      apiKey: "k", baseUrl: "https://api.example.test/v1", model: "acme/one", fetch,
+    }),
+  ];
+  for (const build of builders) {
+    const { fetch, sent } = capturing();
+    await collect(build(fetch).generate({ messages: prefixed, cacheAfter: 2 }));
+    expect(marks(sent[0]!.body)).toBe(0);
+    expect((sent[0]!.body["messages"] as { content: unknown }[])[0]!.content).toBe("You are a bookkeeper.");
+  }
+});
+
+test("a Claude asked for no boundary is sent no mark", async () => {
+  const { fetch, sent } = capturing();
+  const model = createOpenRouterModel({ apiKey: "k", model: "anthropic/claude-opus-5", fetch });
+  await collect(model.generate({ messages: prefixed }));
+  expect(marks(sent[0]!.body)).toBe(0);
+});
+
+// ---- Waits ----------------------------------------------------------------
+
+const inFlight = JSON.stringify({
+  error: {
+    code: 402, message: "Insufficient credits for this request while other requests are in flight",
+    metadata: { reason: "in_flight_budget_exhausted", limit_source: "openrouter_in_flight_budget" },
+  },
+});
+const broke = JSON.stringify({ error: { code: 402, message: "Insufficient credits" } });
+
+/** A wire that answers each status in turn, "now", and then the scripted reply. */
+function refusing(statuses: readonly number[], body: string) {
+  let attempts = 0;
+  const fetch = (async () => {
+    const status = statuses[attempts];
+    attempts += 1;
+    if (status === undefined) return new Response(answered(), { status: 200 });
+    return new Response(body, { status, headers: { "retry-after": "0" } });
+  }) as unknown as typeof globalThis.fetch;
+  return { fetch, attempts: () => attempts };
+}
+
+test("OpenRouter's in-flight 402 is a wait: asked again, and answered once the credit frees", async () => {
+  const wire = refusing([402, 402], inFlight);
+  const model = createOpenRouterModel({ apiKey: "k", model: "acme/one", fetch: wire.fetch });
+  const outcome = await collect(model.generate({ messages: conversation }));
+  expect(outcome.ok).toBe(true);
+  expect(wire.attempts()).toBe(3);
+});
+
+test("an in-flight 402 that never clears is reported as the rate limit it is, still worth trying later", async () => {
+  const wire = refusing([402, 402, 402, 402, 402, 402], inFlight);
+  const model = createOpenRouterModel({ apiKey: "k", model: "acme/one", fetch: wire.fetch });
+  const outcome = await collect(model.generate({ messages: conversation }));
+  expect(outcome.ok).toBe(false);
+  if (outcome.ok) return;
+  expect(outcome.error.code).toBe("rate-limit");
+  expect(outcome.error.retryable).toBe(true);
+  expect(wire.attempts()).toBe(5);
+});
+
+test("a plain 402 is a refusal on OpenRouter, and the in-flight one is only OpenRouter's", async () => {
+  const skint = refusing([402], broke);
+  const outcome = await collect(
+    createOpenRouterModel({ apiKey: "k", model: "acme/one", fetch: skint.fetch }).generate({ messages: conversation }),
+  );
+  expect(outcome.ok).toBe(false);
+  if (!outcome.ok) { expect(outcome.error.code).toBe("failed"); expect(outcome.error.retryable).toBe(false); }
+  expect(skint.attempts()).toBe(1);
+
+  const elsewhere = refusing([402], inFlight);
+  const other = await collect(createOpenAiCompatibleModel({
+    apiKey: "k", baseUrl: "https://api.example.test/v1", model: "acme/one", fetch: elsewhere.fetch,
+  }).generate({ messages: conversation }));
+  expect(other.ok).toBe(false);
+  if (!other.ok) expect(other.error.code).toBe("failed");
+  expect(elsewhere.attempts()).toBe(1);
+});
+
+test("a rate limit and an outage are waited out on this wire", async () => {
+  const wire = refusing([429, 503], "{\"error\":{\"message\":\"slow down\"}}");
+  const model = createOpenAiCompatibleModel({
+    apiKey: "k", baseUrl: "https://api.example.test/v1", model: "acme/one", fetch: wire.fetch,
+  });
+  expect((await collect(model.generate({ messages: conversation }))).ok).toBe(true);
+  expect(wire.attempts()).toBe(3);
+});
+
+test("a body that dies after the first delta is not asked again", async () => {
+  let attempts = 0;
+  const fetch = (async () => {
+    attempts += 1;
+    const encoder = new TextEncoder();
+    return new Response(new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (controller.desiredSize === null) return;
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: "The bal" } }] })}\n`));
+        controller.error(new Error("connection reset"));
+      },
+    }), { status: 200 });
+  }) as unknown as typeof globalThis.fetch;
+  const model = createOpenRouterModel({ apiKey: "k", model: "acme/one", fetch });
+  const outcome = await collect(model.generate({ messages: conversation }));
+  expect(outcome.ok).toBe(false);
+  if (!outcome.ok) expect(outcome.error.code).toBe("provider");
+  // Partial output already left; asking again is the loop's decision, not the wire's.
+  expect(attempts).toBe(1);
+});
+
+test("a cache write OpenRouter reports is counted apart from the prompt it was inside", async () => {
+  // Both cached counts arrive inside `prompt_tokens`. A caller pricing a run
+  // bills a write at a premium and a read at a discount, and folding either
+  // into the plain input count loses real money.
+  const fetch = (async () => new Response(streamed(
+    { choices: [{ delta: { content: "Friday." } }] },
+    { choices: [{ finish_reason: "stop", delta: {} }] },
+    { choices: [], usage: {
+      prompt_tokens: 12_272, completion_tokens: 5,
+      prompt_tokens_details: { cached_tokens: 0, cache_write_tokens: 12_253 },
+    } },
+  ), { status: 200 })) as unknown as typeof globalThis.fetch;
+  const outcome = await collect(createOpenRouterModel({ apiKey: "k", model: "anthropic/claude-haiku-4.5", fetch })
+    .generate({ messages: conversation }));
+  expect(outcome.ok).toBe(true);
+  if (outcome.ok) {
+    expect(outcome.value.usage).toEqual({ inputTokens: 19, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 12_253 });
+  }
 });

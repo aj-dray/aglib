@@ -4,6 +4,7 @@ import type {
 import { err, ok, type Result } from "../../../result.js";
 import { textOf } from "../../../content.js";
 import type { JsonValue } from "../../../json.js";
+import { isWaitStatus, retrying, type RetryOptions } from "../../retry.js";
 
 export interface OpenAiCompatibleOptions {
   apiKey: string;
@@ -17,6 +18,20 @@ export interface OpenAiCompatibleOptions {
    * request outright — so the dialect is declared rather than guessed.
    */
   effortParameter?: "reasoning_effort" | "reasoning" | "none";
+  /**
+   * How this endpoint spells a cache breakpoint, where it has one. Most models
+   * on this wire cache a repeated prefix by themselves and have no field for
+   * it — plain OpenAI rejects one it does not know — so the default sends none.
+   * OpenRouter takes Anthropic's `cache_control` on a text part and forwards
+   * it to the models that cache nothing without one.
+   */
+  cacheBreakpoint?: "cache_control" | "none";
+  /**
+   * A refusal this endpoint means as a wait, beyond the statuses every HTTP
+   * wire means so. Retried before the first delta like those, and reported as
+   * a rate limit when the retries run out.
+   */
+  isWait?: RetryOptions["isWait"];
   /** Injectable for tests; defaults to global fetch. */
   fetch?: typeof fetch;
 }
@@ -26,8 +41,9 @@ export interface OpenAiCompatibleOptions {
  * OpenRouter, Together, Groq, vLLM, Ollama. One adapter, one base URL.
  */
 export function createOpenAiCompatibleModel(options: OpenAiCompatibleOptions): Model {
-  const call = options.fetch ?? fetch;
+  const call = retrying(options.fetch ?? fetch, { ...(options.isWait ? { isWait: options.isWait } : {}) });
   const provider = `openai-compatible:${options.baseUrl.replace(/\/+$/, "")}`;
+  const marking = options.cacheBreakpoint === "cache_control";
   return {
     id: `openai-compatible:${options.model}`,
 
@@ -43,7 +59,7 @@ export function createOpenAiCompatibleModel(options: OpenAiCompatibleOptions): M
           },
           body: JSON.stringify({
             model: options.model,
-            messages: encodeConversation(request.messages, provider),
+            messages: encodeConversation(request.messages, provider, marking ? breakpoints(request) : new Set()),
             ...(request.tools?.length ? { tools: request.tools.map(encodeTool) } : {}),
             ...(request.maxOutputTokens !== undefined ? { max_tokens: request.maxOutputTokens } : {}),
             ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
@@ -57,7 +73,7 @@ export function createOpenAiCompatibleModel(options: OpenAiCompatibleOptions): M
         return err(transportError(error, request.signal));
       }
 
-      if (!response.ok) return err(await httpError(response));
+      if (!response.ok) return err(await httpError(response, options.isWait));
       if (!response.body) return err({ code: "provider", message: "No response body", retryable: true });
 
       const text: string[] = [];
@@ -136,7 +152,23 @@ export function createOpenAiCompatibleModel(options: OpenAiCompatibleOptions): M
   };
 }
 
-/** OpenRouter is this wire with a fixed base URL and attribution headers. */
+/**
+ * OpenRouter is this wire with a fixed base URL, attribution headers, and two
+ * facts of its own.
+ *
+ * It caches Claude only when asked. Every other model it serves reads a
+ * repeated prefix from cache on its own; a Claude request without a
+ * `cache_control` mark is read in full every turn, at full price. The mark
+ * goes on the models that need it and on no other: whether the providers that
+ * cache by themselves ignore a mark is not something its documentation says,
+ * and a strict one could refuse the request.
+ *
+ * It answers 402 for two different things. One is an account with no credit,
+ * which is a refusal. The other is the account's credit being reserved by its
+ * own other requests still in flight, which clears when they finish — the
+ * commonest failure an agent serving several sessions at once will see, and a
+ * wait. The body's structured `error.metadata.reason` tells them apart.
+ */
 export function createOpenRouterModel(input: {
   apiKey: string; model: string; appUrl?: string; appName?: string; fetch?: typeof fetch;
 }): Model {
@@ -145,12 +177,21 @@ export function createOpenRouterModel(input: {
     baseUrl: "https://openrouter.ai/api/v1",
     model: input.model,
     effortParameter: "reasoning",
+    cacheBreakpoint: /^~?anthropic\//.test(input.model) ? "cache_control" : "none",
+    isWait: inFlightBudgetExhausted,
     headers: {
       ...(input.appUrl ? { "http-referer": input.appUrl } : {}),
       ...(input.appName ? { "x-title": input.appName } : {}),
     },
     ...(input.fetch ? { fetch: input.fetch } : {}),
   });
+}
+
+async function inFlightBudgetExhausted(response: Response): Promise<boolean> {
+  if (response.status !== 402) return false;
+  const body = await response.clone().json().catch(() => undefined) as
+    { error?: { metadata?: { reason?: unknown } } } | undefined;
+  return body?.error?.metadata?.reason === "in_flight_budget_exhausted";
 }
 
 function encodeEffort(
@@ -161,25 +202,68 @@ function encodeEffort(
   return parameter === "reasoning" ? { reasoning: { effort } } : { reasoning_effort: effort };
 }
 
-function encodeConversation(messages: readonly Message[], provider: string): Record<string, unknown>[] {
+/**
+ * Which messages carry a breakpoint: the same three places the Anthropic
+ * adapter marks, for the same reasons it gives.
+ *
+ * The prefix ends where the caller says. When that is at or past the leading
+ * run of system messages, the first and the last of them are marked — the last
+ * makes a conversation's own prefix reusable across its turns, the first makes
+ * the standing instructions every conversation shares reusable across
+ * conversations. A boundary past the system run marks the message it ends on
+ * as well. Three at most, inside a budget of four.
+ */
+function breakpoints(request: ModelRequest): ReadonlySet<number> {
+  const boundary = request.cacheAfter;
+  if (boundary === undefined) return new Set();
+  let lead = 0;
+  while (lead < request.messages.length && request.messages[lead]!.role === "system") lead += 1;
+  const marked = new Set<number>();
+  if (lead > 0 && boundary >= lead) marked.add(0).add(lead - 1);
+  if (boundary > lead && boundary <= request.messages.length) marked.add(boundary - 1);
+  return marked;
+}
+
+function encodeConversation(
+  messages: readonly Message[], provider: string, marked: ReadonlySet<number>,
+): Record<string, unknown>[] {
   const out: Record<string, unknown>[] = [];
   let images: ContentPart[] = [];
   const flush = () => {
     if (images.length) out.push({ role: "user", content: encodeContent(images) });
     images = [];
   };
-  for (const message of messages) {
+  messages.forEach((message, index) => {
     // The wire accepts only text in tool replies. Keep every reply in a parallel
     // batch adjacent before supplying its images as associated user content.
     if (message.role !== "tool") flush();
-    out.push(encodeMessage(message, provider));
+    const encoded = encodeMessage(message, provider);
+    if (marked.has(index)) mark(encoded);
+    out.push(encoded);
     if (message.role === "tool" && typeof message.content !== "string") {
       const media = message.content.filter((part) => part.type === "image");
       if (media.length) images.push({ type: "text", text: `Images from tool call ${message.callId}:` }, ...media);
     }
-  }
+  });
   flush();
   return out;
+}
+
+/**
+ * A breakpoint lands on a text part, so a bare string becomes one part to
+ * carry it. A message with no text — an assistant turn that only called tools,
+ * a user turn that is only an image — has nowhere to put one and gets none.
+ */
+function mark(encoded: Record<string, unknown>): void {
+  const content = encoded["content"];
+  if (typeof content === "string") {
+    if (content) encoded["content"] = [{ type: "text", text: content, cache_control: { type: "ephemeral" } }];
+    return;
+  }
+  if (!Array.isArray(content)) return;
+  const last = content.findLast((part: Record<string, unknown>) => part["type"] === "text") as
+    Record<string, unknown> | undefined;
+  if (last) last["cache_control"] = { type: "ephemeral" };
 }
 
 function encodeMessage(message: Message, provider: string): Record<string, unknown> {
@@ -315,29 +399,45 @@ const decodeUsage = (usage: ChatUsage): Usage => ({
   // adds its own margin, so what it charged is a thing only it can say — and
   // the frame carrying it is the one this adapter already reads.
   ...(typeof usage.cost === "number" ? { costUsd: usage.cost } : {}),
-  // `prompt_tokens` is the whole prompt and `cached_tokens` is counted inside
-  // it — "cached tokens present in the prompt". `Usage` keeps the three input
-  // counts disjoint, so the cached part comes out here rather than every
+  // `prompt_tokens` is the whole prompt, and both `cached_tokens` and
+  // `cache_write_tokens` are counted inside it. `Usage` keeps the three input
+  // counts disjoint, so the cached parts come out here rather than every
   // caller having to know which wire produced the number it is holding.
   ...(usage.prompt_tokens !== undefined
-    ? { inputTokens: Math.max(usage.prompt_tokens - (usage.prompt_tokens_details?.cached_tokens ?? 0), 0) } : {}),
+    ? {
+        inputTokens: Math.max(
+          usage.prompt_tokens
+            - (usage.prompt_tokens_details?.cached_tokens ?? 0)
+            - (usage.prompt_tokens_details?.cache_write_tokens ?? 0),
+          0,
+        ),
+      }
+    : {}),
   ...(usage.completion_tokens !== undefined ? { outputTokens: usage.completion_tokens } : {}),
   ...(usage.prompt_tokens_details?.cached_tokens !== undefined
     ? { cacheReadTokens: usage.prompt_tokens_details.cached_tokens } : {}),
+  ...(usage.prompt_tokens_details?.cache_write_tokens !== undefined
+    ? { cacheWriteTokens: usage.prompt_tokens_details.cache_write_tokens } : {}),
 });
 
-async function httpError(response: Response): Promise<ModelError> {
+/**
+ * A refusal, or a wait the retries did not outlast. The second keeps a
+ * retryable code: the provider never said the request was wrong, and a caller
+ * with the time to try again later is told so.
+ */
+async function httpError(response: Response, isWait: RetryOptions["isWait"]): Promise<ModelError> {
+  const wait = isWaitStatus(response.status) || (await isWait?.(response) ?? false);
   const body = await response.text().catch(() => "");
   const code: ModelError["code"] =
     response.status === 401 || response.status === 403 ? "auth"
-    : response.status === 429 ? "rate-limit"
     : response.status === 400 && /context|token/i.test(body) ? "context-length"
-    : response.status >= 500 ? "provider"
+    : wait && (response.status === 429 || response.status === 402) ? "rate-limit"
+    : wait ? "provider"
     : "failed";
   return {
     code,
     message: `${response.status} ${response.statusText}${body ? `: ${body.slice(0, 400)}` : ""}`,
-    retryable: code === "rate-limit" || code === "provider",
+    retryable: wait,
   };
 }
 
@@ -365,7 +465,11 @@ async function* sseLines(body: ReadableStream<Uint8Array>): AsyncGenerator<strin
 interface ChatUsage {
   prompt_tokens?: number;
   completion_tokens?: number;
-  prompt_tokens_details?: { cached_tokens?: number };
+  /**
+   * `cache_write_tokens` is OpenRouter's, reported when the model it routed to
+   * wrote the marked prefix; plain OpenAI sends only `cached_tokens`.
+   */
+  prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
   /**
    * What this generation was charged. OpenRouter sets it on every response and
    * calls it credits, whose base currency is US dollars; plain OpenAI and the

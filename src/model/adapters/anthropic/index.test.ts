@@ -125,9 +125,9 @@ test("the model this adapter was built with is the model it asks for", async () 
 });
 
 test("cache writes are counted apart from the tokens that were read back", async () => {
-  // The one count this wire has and the OpenAI one does not, so the shared
-  // contract cannot ask for it. An application pricing a run bills a write at a
-  // different rate from a read, and folding the two loses real money.
+  // A count plain OpenAI never sends, so the shared contract cannot ask for
+  // it. An application pricing a run bills a write at a different rate from a
+  // read, and folding the two loses real money.
   const { model } = capturing(() => sse(
     {
       type: "message_start",
@@ -219,4 +219,20 @@ test("tool-result images and text reach the provider inside their matching paral
       { type: "image", source: { type: "url", url: "https://example.test/screen.jpg" } },
     ] },
   ] });
+});
+
+test("an overloaded provider is waited out before the first delta", async () => {
+  let attempts = 0;
+  const model = createAnthropicModel({
+    apiKey: "k", model: "claude-opus-5",
+    fetch: (async () => {
+      attempts += 1;
+      // 529 is this provider's own word for overloaded, and it is a 5xx like any other.
+      if (attempts < 3) return new Response("{\"error\":{\"type\":\"overloaded_error\"}}", { status: 529, headers: { "retry-after": "0" } });
+      return new Response(answered(), { status: 200 });
+    }) as unknown as typeof fetch,
+  });
+  const outcome = await collect(model.generate({ messages: conversation }));
+  expect(outcome.ok).toBe(true);
+  expect(attempts).toBe(3);
 });
