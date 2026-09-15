@@ -46,6 +46,8 @@ one besides tools. Getting the split right is the loop's job because only the lo
 prefix ends; a run-scoped fact written mid-run therefore applies from the next run, because
 rewriting a cached prefix invalidates every following turn.
 
+The loop hands that boundary to the model as `cacheAfter`, and each wire does with it what its provider needs; [Choosing a model](#choosing-a-model) says which wires mark it and for which models.
+
 ## Keeping a long conversation in budget
 
 `createCompactionHook` in `Agent.hooks` folds older turns into a summary before a model call once the estimated request
@@ -147,6 +149,20 @@ those connections.
 `turn` input, then offers those user messages to the active generation. Acceptance means the
 provider applied the input to a successor generation. Rejection does not cancel the current
 generation: it finishes, and the durable input is read at the next ordinary model boundary.
+
+### Cache breakpoints
+
+`cacheAfter` ends the cacheable prefix, and a provider that caches only on request is told where. The Anthropic adapter marks `cache_control` on the first and the last leading system block and on the block the boundary ends on: the last mark makes a conversation's own prefix reusable across its turns, and the first makes the standing instructions every conversation shares reusable across conversations, so an agent serving many callers pays for what differs and not for what they have in common. `createOpenRouterModel` marks the same three places, as `cache_control` on a text part, for models whose id begins `anthropic/`, because a Claude served through OpenRouter caches nothing without one and reads and writes its whole prompt at full price every turn. No other model there is sent a mark: every other provider it routes to caches a repeated prefix by itself, whether those providers ignore a mark is not something OpenRouter documents, and a strict endpoint can refuse a field it does not know. `createOpenAiCompatibleModel` sends none unless its `cacheBreakpoint` option names the endpoint's spelling, and the Responses adapter sends none because OpenAI caches automatically. What was read and written comes back as `cacheReadTokens` and `cacheWriteTokens`, disjoint from `inputTokens`, on every wire that reports them.
+
+### Waits
+
+A provider that has not begun to answer can fail a request two ways, and only one is a refusal. A rate limit, an overloaded upstream, a connection that never opened, or OpenRouter's credit being reserved by the account's own other requests still in flight is the provider saying *not yet*: nothing about the request was wrong, and it clears on its own. The HTTP adapters — Anthropic, OpenAI-compatible and OpenRouter — wait and send such a request again before the first delta is yielded, in one place in the model layer, and a caller sees one generation either way.
+
+What counts as a wait is a status or structured metadata, never a message: 408, 409, 425, 429, any 5xx and a transport error on every HTTP wire, and on `createOpenRouterModel` a 402 whose body's `error.metadata.reason` is `in_flight_budget_exhausted`. A plain 402, 400, 401, 403, 404, 413 or 422 is a refusal — an account with no credit, a context that does not fit, a bad credential, declined content — and is reported at once, because sending the same request again asks for the same answer.
+
+The bounds: at most four retries per request. A wait is `Retry-After` when the provider sends one, as seconds or an HTTP date, honoured up to 120 s; otherwise full-jitter backoff over a ceiling that starts at 1 s and doubles each retry, never past 30 s. No request waits more than 180 s in total, and a wait that would pass that is not taken. An aborted `signal` ends a wait at once and the generation reports `cancelled`. When the retries run out the error keeps a retryable code — `rate-limit` for 429 and the in-flight 402, `provider` for the rest — because the provider never said the request was wrong, and a caller with more time than the adapter is told so.
+
+A failure after the first delta is not retried by the adapter: partial output has already reached the caller, and whether to ask again is the loop's decision, which continues past a retryable failure when it has new input to send. The Responses adapter holds a WebSocket rather than making an HTTP request per generation, so neither this nor the OpenAI SDK's own HTTP retry sees its generations; a `rate_limit_exceeded` event there fails the generation as `rate-limit`, retryable, and is not retried.
 
 ## Waiting for work
 

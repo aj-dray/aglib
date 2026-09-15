@@ -4,7 +4,7 @@ import { z } from "zod";
 import { textOf } from "../src/content.js";
 import { createCompactionHook, estimateTokens, summarize } from "../src/harness/adapters/native/compaction.js";
 import type { HarnessContext } from "../src/harness/harness.js";
-import { createOpenAiCompatibleModel } from "../src/model/adapters/openai-compatible/index.js";
+import { createOpenRouterModel } from "../src/model/adapters/openai-compatible/index.js";
 import { collect, type Model, type ModelRequest } from "../src/model/model.js";
 import type { Entry, Stored, Usage } from "../src/session/entry.js";
 import { createLog } from "../src/session/log.js";
@@ -150,7 +150,7 @@ async function main() {
   const save = (name: string, value: unknown) => writeFile(resolve(output, name), JSON.stringify(value, null, 2) + "\n");
   await save("fixtures.json", { instructions, cases });
   const deadline = AbortSignal.timeout(10 * 60_000);
-  const provider = createOpenAiCompatibleModel({ apiKey, model: modelId, baseUrl: "https://openrouter.ai/api/v1", effortParameter: "reasoning" });
+  const provider = createOpenRouterModel({ apiKey, model: modelId, appName: "aglib-eval-compaction" });
   const calls: { name: string; usage?: Usage; elapsedMs: number; ok: boolean }[] = [];
   const evaluations: { case: string; stage: number; variant: Variant; checks: ReturnType<typeof checksFor>; usage: Usage }[] = [];
   const folds: { stage: number; beforeTokens: number; afterTokens: number; checkpoint: Stored }[] = [];

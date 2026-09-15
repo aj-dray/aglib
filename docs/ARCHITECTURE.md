@@ -59,6 +59,8 @@ When a wire exposes only plaintext reasoning for continuation, that plaintext is
 of the durable state; an application with stricter retention requirements must configure the
 provider not to return it. aglib does not copy it into content or render it as conversation text.
 
+A wait is the wire's to outlast, and a refusal is the loop's to report. The two HTTP model adapters share one retrying `fetch` in the model layer, because the wire is the only place "before the first delta" is exact — a status has been read and no body has — and a provider asking for a moment should cost the loop nothing: no entry, no failed activation, no second worker. Once a body is open, partial output has reached the caller, and whether to ask again is the loop's decision. `INTERFACE.md` says what counts as a wait and how long one is waited for.
+
 **One fact, not eight.** A caller only ever needs to know whether an interrupted activation can
 restart from the log, and `run.ts` is the consumer — it closes a session no harness can continue
 rather than handing it out for ever. Everything a larger capability matrix carried was optional
