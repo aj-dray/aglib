@@ -55,9 +55,8 @@ export function createAnthropicModel(options: AnthropicOptions): Model {
       const system = request.messages.slice(0, lead).map((message) => textOf(message.content));
       const conversation = request.messages.slice(lead);
 
-      // The prefix ends where the caller says it does. In practice that is the
-      // end of the system prompt, which is the one span fixed for the whole
-      // run; a mark past it is honoured too rather than quietly ignored.
+      // Mark the reusable system prefix and the caller's conversation boundary;
+      // volatile turn context follows that boundary and must stay outside it.
       const boundary = request.cacheAfter;
       const cacheSystem = boundary !== undefined && boundary >= lead && system.length > 0;
       const cacheAt = boundary !== undefined && boundary > lead ? boundary - lead - 1 : -1;

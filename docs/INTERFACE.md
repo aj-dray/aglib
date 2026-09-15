@@ -46,7 +46,7 @@ one besides tools. Getting the split right is the loop's job because only the lo
 prefix ends; a run-scoped fact written mid-run therefore applies from the next run, because
 rewriting a cached prefix invalidates every following turn.
 
-The loop hands that boundary to the model as `cacheAfter`, and each wire does with it what its provider needs; [Choosing a model](#choosing-a-model) says which wires mark it and for which models.
+The cached prefix includes the committed conversation as well as instructions and run context. Its boundary advances after each user input and tool result, stopping before the trailing turn context. The loop hands that boundary to the model as `cacheAfter`, and each wire does with it what its provider needs; [Choosing a model](#choosing-a-model) says which wires mark it and for which models.
 
 ## Keeping a long conversation in budget
 
