@@ -149,6 +149,49 @@ test("async calls complete before the response and opaque output is replayed exa
   model.close();
 });
 
+test("a base64 file in a tool result rides the wire as a data URL", async () => {
+  const wire = new FakeConnection();
+  const model = createOpenAiResponsesModel({ apiKey: "k", model: "gpt-6-astra", connect: () => wire });
+  wire.onSend = (event) => {
+    if (event.type !== "response.create") return;
+    const lane = laneOf(event);
+    wire.message(created(lane, "resp_file"));
+    wire.message(completed(lane, "resp_file"));
+  };
+
+  const outcome = await drain(model.generate({
+    messages: [
+      { role: "assistant", content: "", calls: [{ callId: "call_read", name: "read", arguments: "{}" }] },
+      {
+        role: "tool", callId: "call_read",
+        content: [
+          { type: "file", mediaType: "application/pdf", name: "cv.pdf", source: { kind: "inline", data: "JVBERi0x" } },
+          { type: "file", mediaType: "application/pdf", source: { kind: "url", url: "https://files.test/cv.pdf" } },
+        ],
+      },
+      { role: "user", content: "What does it say?" },
+    ],
+  }));
+
+  expect(outcome.result.ok).toBe(true);
+  const request = wire.sent[0];
+  expect(request?.type).toBe("response.create");
+  if (request?.type === "response.create") {
+    expect(request.input).toEqual([
+      { type: "function_call", call_id: "call_read", name: "read", arguments: "{}" },
+      {
+        type: "function_call_output", call_id: "call_read",
+        output: [
+          { type: "input_file", file_data: "data:application/pdf;base64,JVBERi0x", filename: "cv.pdf" },
+          { type: "input_file", file_url: "https://files.test/cv.pdf" },
+        ],
+      },
+      { type: "message", role: "user", content: "What does it say?" },
+    ]);
+  }
+  model.close();
+});
+
 test("output text keeps the phase of its response item", async () => {
   const wire = new FakeConnection();
   const model = createOpenAiResponsesModel({ apiKey: "k", model: "gpt-6-astra", connect: () => wire });

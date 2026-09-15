@@ -678,7 +678,11 @@ function encodeContent(content: Content, output: boolean): unknown {
     if (part.type === "file" && !output) {
       parts.push(part.source.kind === "url"
         ? { type: "input_file", file_url: part.source.url }
-        : { type: "input_file", file_data: part.source.data, ...(part.name ? { filename: part.name } : {}) });
+        : {
+          type: "input_file",
+          file_data: `data:${part.mediaType};base64,${part.source.data}`,
+          ...(part.name ? { filename: part.name } : {}),
+        });
       continue;
     }
     if (part.type === "opaque" && part.provider === provider) parts.push(part.data);
