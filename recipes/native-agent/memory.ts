@@ -72,7 +72,6 @@ export function memoryTools(path: string): readonly Tool[] {
         "Edit your durable memory. `add` records a fact worth having in every future conversation; "
         + "`replace` and `remove` find an existing entry by a distinctive substring of it. "
         + "A write applies from the next conversation, not this one. There is no read: your entries are already above.",
-      annotations: { sequential: true },
       schema: z.discriminatedUnion("action", [
         z.object({ action: z.literal("add"), text: z.string().min(3) }),
         z.object({ action: z.literal("replace"), find: z.string().min(3), text: z.string().min(3) }),

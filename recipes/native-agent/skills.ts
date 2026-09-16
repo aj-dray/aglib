@@ -46,7 +46,7 @@ export function skillTools(directory: string): readonly Tool[] {
     defineTool({
       name: "load_skill",
       description: "Load the full instructions for a named skill. Consult the skill index above before calling.",
-      annotations: { readOnly: true },
+      concurrent: true,
       schema: z.object({ name: z.string() }),
       execute: async ({ name }) => {
         const skill = (await listSkills(directory)).find((entry) => entry.name === name);

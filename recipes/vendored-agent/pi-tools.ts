@@ -61,7 +61,6 @@ function adopt(tool: ReturnType<typeof createCodingTools>[number]): Tool {
       name: tool.name,
       description: tool.description,
       parameters: tool.parameters as JsonValue,
-      annotations: { sequential: true },
     }),
     prepare(raw: unknown) {
       const parsed = validator.safeParse(raw);

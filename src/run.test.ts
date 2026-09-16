@@ -13,7 +13,7 @@ import type { Agent } from "./agent.js";
 import type { Message, Model, ModelRequest } from "./model/model.js";
 
 const ledger = defineTool({
-  name: "read_ledger", description: "read", annotations: { readOnly: true },
+  name: "read_ledger", description: "read", concurrent: true,
   schema: z.object({}),
   execute: () => ({ content: "1250" }),
 });
@@ -467,7 +467,7 @@ test("one tool's result and deliveries commit before a slower concurrent call fi
   const fastGate = new Promise<void>((resolve) => { fastCommitted = resolve; });
   const send = defineTool({
     name: "send", description: "send", schema: z.object({ target: z.string() }),
-    annotations: { readOnly: true },
+    concurrent: true,
     execute: async ({ target }, context) => {
       context.enqueue({ sessionId: target, input: target });
       if (target === "slow-child") await slowGate;
@@ -599,7 +599,7 @@ test("a message arriving mid-activation is folded in without ending the turn", a
   ]);
 
   const delivering = defineTool({
-    name: "read_ledger", description: "read", annotations: { readOnly: true },
+    name: "read_ledger", description: "read", concurrent: true,
     schema: z.object({}),
     execute: async () => {
       // A peer messages this session while its activation is running — the
@@ -640,7 +640,7 @@ test("a run that keeps calling tools folds without waiting to end", async () => 
   // refused it.
   const store = createSqliteStore({ database: new Database(":memory:") });
   const bulky = defineTool({
-    name: "read_ledger", description: "read", annotations: { readOnly: true },
+    name: "read_ledger", description: "read", concurrent: true,
     schema: z.object({}),
     execute: () => ({ content: "1250 ".repeat(400) }),
   });

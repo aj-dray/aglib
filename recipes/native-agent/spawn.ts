@@ -39,7 +39,6 @@ export function spawnTools(input: { store: Store; agent: { id: string; version: 
         "Hand a self-contained task to a subagent. It does not see this conversation, so state the goal and "
         + "every fact it needs. It has a shell and your skills, and cannot spawn further. Its answer arrives "
         + "as a message here when it is done, so say what you are doing and carry on.",
-      annotations: { sequential: true },
       schema: z.object({
         goal: z.string().min(10).describe("What the subagent should achieve, and what to report back."),
         context: z.string().default("").describe("Facts it needs that it has no way to discover."),
