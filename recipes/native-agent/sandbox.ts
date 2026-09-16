@@ -47,9 +47,6 @@ export function bashTools(sandbox: Sandbox): readonly Tool[] {
     defineTool({
       name: "bash",
       description: `Run a shell command. Working directory is ${sandbox.root}. This is your only hand: read, write, search and edit files with it.`,
-      // Not read-only: it may write, and the broker reads this to decide
-      // whether adjacent calls may run concurrently.
-      annotations: { sequential: true },
       schema: z.object({ command: z.string(), timeoutMs: z.number().int().default(120_000) }),
       execute: async ({ command, timeoutMs }, context) => {
         const output = await sandbox.exec({

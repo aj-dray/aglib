@@ -4,7 +4,7 @@ import { createExecutor } from "./execute.js";
 import { defineTool } from "./tool.js";
 
 const echo = defineTool({
-  name: "echo", description: "echo", annotations: { readOnly: true },
+  name: "echo", description: "echo", concurrent: true,
   schema: z.object({ text: z.string() }),
   execute: ({ text }) => ({ content: text }),
 });
@@ -93,7 +93,7 @@ test("concurrent calls report as each finishes and keep their own deliveries", a
   const slow = new Promise<void>((resolve) => { release = resolve; });
   const work = defineTool({
     name: "work", description: "work", schema: z.object({ target: z.string() }),
-    annotations: { readOnly: true },
+    concurrent: true,
     execute: async ({ target }, context) => {
       context.enqueue({ sessionId: target, input: `from ${target}` });
       if (target === "slow") await slow;
@@ -120,8 +120,38 @@ test("concurrent calls report as each finishes and keep their own deliveries", a
   }
 });
 
+test("a call not declared concurrent waits for the calls before it and holds the calls after it", async () => {
+  const events: string[] = [];
+  const gates = new Map<string, () => void>();
+  const tool = (name: string, concurrent: boolean) => defineTool({
+    name, description: name, schema: z.object({}), concurrent,
+    execute: async (_, context) => {
+      events.push(`${context.callId} started`);
+      await new Promise<void>((resolve) => { gates.set(context.callId, resolve); });
+      events.push(`${context.callId} finished`);
+      return { content: context.callId };
+    },
+  });
+  const executor = createExecutor({ tools: [tool("read", true), tool("write", false)], ...base });
+  const stream = executor.execute({ calls: [
+    call("read-1", "read", {}), call("write", "write", {}), call("read-2", "read", {}),
+  ] })[Symbol.asyncIterator]();
 
-test("a prior sequential call can revoke authority for the next call", async () => {
+  for (const callId of ["read-1", "write", "read-2"]) {
+    const pending = stream.next();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Nothing else has started: the call before an ordered one finishes first, and the call after it waits.
+    expect(events.at(-1)).toBe(`${callId} started`);
+    gates.get(callId)!();
+    const completion = await pending;
+    expect(!completion.done && completion.value.callId).toBe(callId);
+  }
+  expect(events).toEqual([
+    "read-1 started", "read-1 finished", "write started", "write finished", "read-2 started", "read-2 finished",
+  ]);
+});
+
+test("a prior ordered call can revoke authority for the next call", async () => {
   let allowed = true;
   let effects = 0;
   const revoke = defineTool({ name: "revoke", description: "", schema: z.object({}),

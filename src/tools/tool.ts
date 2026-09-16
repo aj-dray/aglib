@@ -13,7 +13,11 @@ export interface ToolSpec {
   parameters: JsonValue;
   /** The model may continue its turn while the application runs this tool. */
   async?: boolean;
-  annotations?: { readOnly?: boolean; sequential?: boolean };
+  /**
+   * Calls of this tool may run alongside adjacent concurrent calls in one
+   * batch. The library verifies nothing about that claim.
+   */
+  concurrent?: boolean;
 }
 
 export interface ToolContext {
@@ -100,7 +104,7 @@ export function defineTool<TSchema extends z.ZodType>(input: {
   description: string;
   schema: TSchema;
   async?: boolean;
-  annotations?: ToolSpec["annotations"];
+  concurrent?: boolean;
   execute(args: z.output<TSchema>, context: ToolContext): ToolResult | Promise<ToolResult>;
 }): Tool {
   const parameters = z.toJSONSchema(input.schema) as JsonValue;
@@ -110,7 +114,7 @@ export function defineTool<TSchema extends z.ZodType>(input: {
       description: input.description,
       parameters,
       ...(input.async !== undefined ? { async: input.async } : {}),
-      ...(input.annotations ? { annotations: input.annotations } : {}),
+      ...(input.concurrent !== undefined ? { concurrent: input.concurrent } : {}),
     }),
     prepare(raw: unknown) {
       const parsed = input.schema.safeParse(raw);

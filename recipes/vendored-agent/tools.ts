@@ -22,7 +22,6 @@ export const sandboxTools = (sandbox: Sandbox): readonly Tool[] => [
   defineTool({
     name: "bash",
     description: "Run a shell command inside this agent's sandbox.",
-    annotations: { sequential: true },
     schema: z.object({ command: z.string(), timeoutMs: z.number().int().default(300_000) }),
     execute: async ({ command, timeoutMs }, context) => {
       const output = await sandbox.exec({
@@ -41,7 +40,7 @@ export const sandboxTools = (sandbox: Sandbox): readonly Tool[] => [
   defineTool({
     name: "read_file",
     description: "Read a file from the sandbox.",
-    annotations: { readOnly: true },
+    concurrent: true,
     schema: z.object({ path: z.string() }),
     execute: async ({ path }) => {
       const file = await sandbox.readFile({ path });
@@ -53,7 +52,6 @@ export const sandboxTools = (sandbox: Sandbox): readonly Tool[] => [
   defineTool({
     name: "write_file",
     description: "Write a file in the sandbox, creating or replacing it.",
-    annotations: { sequential: true },
     schema: z.object({ path: z.string(), content: z.string() }),
     execute: async ({ path, content }) => {
       const written = await sandbox.writeFile({ path, content });

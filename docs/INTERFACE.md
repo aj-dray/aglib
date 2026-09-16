@@ -120,9 +120,13 @@ says what actually served and `entry.generation.model` records it, which is what
 prices a run from. `effort` stays on the request, because how hard to think is a knob over one call
 rather than part of which model this is.
 
+A tool declares `ToolSpec.concurrent: true` when its calls may run alongside adjacent concurrent
+calls in one batch, up to the executor's `maxConcurrency` of eight; the library verifies nothing
+about that claim.
+
 A configured model that accepts asynchronous client tools says so with `Model.asyncTools: true`.
 The application may then declare an individual `ToolSpec.async`; nothing infers this from a tool's
-read-only annotation or a model name. A completed asynchronous call can arrive before its model
+`concurrent` declaration or a model name. A completed asynchronous call can arrive before its model
 generation ends. The native harness commits the call and `tool.started` before running it, lets the
 generation continue, and later commits the real result under the original call id. A call still
 running is left open in model context. If the process dies, recovery closes it as unreported and
@@ -247,7 +251,7 @@ structured, not a sentence it must interpret. Context arrives through the explic
 Diagnostic, audit and secret-bearing detail stays in a tool result's `details`, which never reaches
 model-visible content.
 
-Permission decisions see validated arguments when each call reaches its execution slot, after preceding sequential calls finish. Cancellation while a decision is pending prevents execution. Applications still enforce consequential authority atomically at the resource boundary; a callback does not lock external state.
+Permission decisions see validated arguments when each call reaches its execution slot, after the calls ordered before it finish. Cancellation while a decision is pending prevents execution. Applications still enforce consequential authority atomically at the resource boundary; a callback does not lock external state.
 
 Tool results may carry `uncertain: true` when execution began but its effect is not known. A thrown tool and an interrupted call are uncertain, not evidence that nothing happened. The model reads that it must reconcile the original action before retrying, including under a new call ID; the executor never automatically repeats it. A definitive refusal remains an ordinary error. This records knowledge, not exactly-once execution of arbitrary tools.
 

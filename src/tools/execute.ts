@@ -20,7 +20,7 @@ export function createExecutor(input: {
   sessionId: string;
   runId: string;
   report(callId: string, data: JsonValue): void;
-  /** Adjacent read-only calls run together; this caps how many at once. */
+  /** Adjacent concurrent calls run together; this caps how many at once. */
   maxConcurrency?: number;
 }): ToolExecutor {
   const byName = new Map<string, Tool>();
@@ -60,10 +60,9 @@ export function createExecutor(input: {
         const prepared = tool.prepare(raw);
         if (!prepared.ok) { planned.push(settled(prepared.error)); continue; }
 
-        const annotations = tool.spec.annotations;
         planned.push({
           callId: call.callId,
-          concurrent: annotations?.readOnly === true && annotations.sequential !== true,
+          concurrent: tool.spec.concurrent === true,
           run: async () => {
             // Earlier calls may revoke authority. Decide only when this call
             // reaches its execution slot, never while planning the batch.

@@ -197,8 +197,9 @@ bus or inbox table.
 A tool executor reports one completed call at a time. Each completion carries only the deliveries
 that call produced, and the harness commits that result with those deliveries before accepting the
 next completion. A quick `send` therefore reaches its recipient while an adjacent slow tool is
-still running; a later failure cannot misattribute or erase the earlier delivery. Adjacent
-read-only calls may finish out of order. Effectful calls retain their declared order.
+still running; a later failure cannot misattribute or erase the earlier delivery. Adjacent calls of
+tools declared `concurrent` run together and may finish out of order; every other call keeps its
+declared order.
 
 A `Delivery` carries four things beyond its content:
 
