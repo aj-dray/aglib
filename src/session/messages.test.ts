@@ -25,6 +25,24 @@ test("projects a conversation, and places context by lifetime around the cache b
   expect(JSON.stringify(messages)).not.toContain("tool.started");
 });
 
+test("run.context is the application's prefix snapshot and is not model-visible", () => {
+  const messages = toMessages({
+    instructions: "Be brief.",
+    context: { run: "facts" },
+    entries: log(
+      {
+        type: "run.context", runId: "r", build: "abc",
+        instructions: "Be brief.", run: "facts",
+        tools: [{ name: "bash", description: "Run a command.", parameters: {} }],
+      },
+      { type: "run.started", runId: "r", input: "hello" },
+    ),
+  });
+  expect(messages.map((message) => message.role)).toEqual(["system", "system", "user"]);
+  expect(JSON.stringify(messages)).not.toContain("abc");
+  expect(JSON.stringify(messages)).not.toContain("bash");
+});
+
 test("projects provider continuation state beside the assistant turn", () => {
   const providerState = { provider: "acme-wire", items: [{ signature: "sig-1" }] } as const;
   const messages = toMessages({

@@ -119,12 +119,38 @@ export type Entry =
        * span it took. `Stored.at` is when the entry was committed, which is a
        * different fact and not a substitute — anything projecting a generation
        * needs both ends of the call, and the commit is neither of them.
+       *
+       * `turn` is the `context.turn` that sat after the cache boundary on this
+       * request. The doctrine, run context and tools are on `run.context` once
+       * for the activation; the log is the transcript; this is the slice that
+       * changes every call. Absent when the application supplied none.
        */
-      generation?: { id: string; model?: string; startedAt: string; endedAt?: string };
+      generation?: { id: string; model?: string; startedAt: string; endedAt?: string; turn?: string };
     }
   | { type: "model.finished"; runId: string; purpose: string; generation: { id: string; model?: string; startedAt: string; endedAt: string }; usage?: Usage }
   | { type: "tool.started"; runId: string; callId: string }
   | { type: "tool.finished"; runId: string; callId: string; result: ToolResult }
+  /**
+   * The prefix this run offered the model: standing instructions, run-scoped
+   * context, and the tool catalogue. The application commits it; the loop does
+   * not. Not model-visible — the same facts already sit at the front of every
+   * request, and projecting them again would send them twice.
+   */
+  | {
+      type: "run.context";
+      runId: string;
+      /** The application's build that composed this prefix, when it says. */
+      build?: string;
+      instructions: Content;
+      run?: string;
+      tools?: readonly {
+        name: string;
+        description: string;
+        parameters: JsonValue;
+        async?: boolean;
+        concurrent?: boolean;
+      }[];
+    }
   /** Compaction output. `replaces` is the seq up to which entries are folded; nothing is deleted. */
   | { type: "summary"; runId: string; content: string; replaces: number }
   | { type: "run.finished"; runId: string; outcome: "completed" | "failed" | "cancelled"; error?: Failure };

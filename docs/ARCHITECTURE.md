@@ -28,7 +28,10 @@ flowchart LR
 
 There is one state class: **the session log** — the ordered entries of what happened. It is not a
 record of state kept elsewhere; the loop projects its context from it every turn and appends its
-results back, which is why no test has to prove two representations agree.
+results back, which is why no test has to prove two representations agree. `run.context` is
+bookkeeping the application may commit: the standing prefix a run offered, which `toMessages`
+skips so those facts are not sent twice. Reconstructing a generation is that row, the log, and
+`assistant.generation.turn`.
 
 A store persists the log and answers one more question: what work is owed. Undelivered input makes a
 session runnable. Those commit together — a run's terminal entry and the input it hands to another

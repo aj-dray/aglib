@@ -119,9 +119,10 @@ export function toMessages(input: {
           ...(entry.result.isError ? { isError: true } : {}),
         });
         break;
-      // Not model-visible: tool.started is bookkeeping and run.finished is a
-      // boundary.
+      // Not model-visible: tool.started and run.context are bookkeeping, and
+      // run.finished is a boundary.
       case "tool.started":
+      case "run.context":
       case "run.finished":
         break;
     }
