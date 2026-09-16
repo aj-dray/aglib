@@ -24,7 +24,7 @@ message items, including their phases.
 
 ## Lifecycle hooks
 
-`Agent.hooks` is an ordered list of named, trusted application callbacks: `beforeRun`, `beforeModel`, `afterModel`, `beforeStop`, and `afterRun`. No script runner or second workflow state is involved. Model hooks run only at model boundaries exposed by a harness; the native harness exposes every generation, while an external harness owning its loop need not do so.
+`Agent.hooks` is an ordered list of named, trusted application callbacks: `beforeRun`, `beforeModel`, `afterModel`, `beforeStop`, and `afterRun`. No script runner or second workflow state is involved. Model hooks run only at model boundaries exposed by a harness; the native harness exposes every generation, while an external harness owning its loop need not do so. `afterModel` receives the `ModelRequest` that was sent, so an application can observe the exact call without wrapping `generate`. The log does not store that request: the prefix is a `run.context` entry the application commits once, the transcript is the rest of the log, and `assistant.generation.turn` is the per-call slice that sat after the cache boundary.
 
 `beforeStop` sees the proposed outcome. It may return `{ input }` to continue a normally completed run, or `{ deliveries }` to deliver with the terminal commit. Each named hook can add input once per run, recorded as `hook.input` in the existing log; resuming that run does not reset the allowance. Cancellation, deadlines and failures cannot be continued. Nothing creates another session or queued arrival. Deliveries are collected only when no hook continues the run.
 

@@ -6,7 +6,7 @@ import { createFakeModel } from "./model/adapters/fake/index.js";
 import { createSqliteStore } from "./store/adapters/sqlite.js";
 import { err } from "./result.js";
 import type { Agent } from "./agent.js";
-import type { Model } from "./model/model.js";
+import type { Model, ModelRequest } from "./model/model.js";
 
 const agent = (model: Model, hooks: Agent["hooks"]): Agent => ({
   id: "hooks", version: "1", instructions: "Work", harness: createNativeHarness({ model }), hooks,
@@ -82,4 +82,52 @@ test("a throwing preparation hook closes the run and still releases resources", 
   expect((await run.result).status).toBe("failed");
   expect(entries.at(-1)?.type).toBe("run.finished");
   expect(cleaned).toBe(true);
+});
+
+test("afterModel sees the request, and the assistant entry keeps that call's turn context", async () => {
+  let request: ModelRequest | undefined;
+  const result = await runAgent({
+    input: "help",
+    context: { run: "facts", turn: () => "today" },
+    agent: agent(createFakeModel([{ text: "done" }]), [{
+      name: "observe",
+      afterModel(_context, _result, sent) { request = sent; },
+      afterRun(context) {
+        const entry = context.entries().find((one) => one.type === "assistant");
+        expect(entry?.type === "assistant" && entry.generation?.turn).toBe("today");
+      },
+    }]),
+  }).result;
+  expect(result.status).toBe("completed");
+  expect(request?.messages.map((message) => message.content)).toEqual(["Work", "facts", "help", "today"]);
+});
+
+test("an application may snapshot the prefix on the log without sending it twice", async () => {
+  const store = createSqliteStore({ database: new Database(":memory:") });
+  const result = await runAgent({
+    store, sessionId: "s", input: "help",
+    context: { run: "facts" },
+    agent: agent(createFakeModel([{ text: "done" }]), [{
+      name: "snapshot",
+      async beforeRun(context) {
+        await context.commit([{
+          type: "run.context",
+          runId: context.runId,
+          build: "abc",
+          instructions: context.instructions,
+          ...(context.context?.run ? { run: context.context.run } : {}),
+        }]);
+      },
+    }]),
+  }).result;
+  expect(result.status).toBe("completed");
+  const read = await store.read({ sessionId: "s" });
+  if (!read.ok) throw Error("read");
+  expect(read.value.entries.map((entry) => entry.type)).toEqual([
+    "run.started", "run.context", "assistant", "run.finished",
+  ]);
+  const snapshot = read.value.entries.find((entry) => entry.type === "run.context");
+  expect(snapshot?.type === "run.context" && snapshot.build).toBe("abc");
+  expect(snapshot?.type === "run.context" && snapshot.instructions).toBe("Work");
+  expect(snapshot?.type === "run.context" && snapshot.run).toBe("facts");
 });

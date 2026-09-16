@@ -1,6 +1,6 @@
 import type { Content } from "../content.js";
 import type { Delivery, Entry, Stored, Usage } from "../session/entry.js";
-import type { Message, ModelResponse, ModelError } from "../model/model.js";
+import type { Message, ModelRequest, ModelResponse, ModelError } from "../model/model.js";
 import type { Result } from "../result.js";
 import type { ToolExecutor } from "../tools/tool.js";
 import type { Failure } from "../result.js";
@@ -105,7 +105,16 @@ export interface LifecycleHook {
   name: string;
   beforeRun?(context: HarnessContext): void | Promise<void>;
   beforeModel?(context: HarnessContext): void | Failure | Promise<void | Failure>;
-  afterModel?(context: HarnessContext, result: Result<ModelResponse, ModelError>): void | Promise<void>;
+  /**
+   * After one generation, with the request that was sent. The native harness
+   * always has that request; an external harness that owns its loop need not
+   * expose the boundary at all.
+   */
+  afterModel?(
+    context: HarnessContext,
+    result: Result<ModelResponse, ModelError>,
+    request: ModelRequest,
+  ): void | Promise<void>;
   /** Only a completed, non-cancelled run may continue, once per hook name and run id. */
   beforeStop?(context: HarnessContext, result: HarnessResult):
     void | { input: Content } | { deliveries: readonly Delivery[] } |

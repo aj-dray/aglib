@@ -1,6 +1,6 @@
 import type { Harness, HarnessContext, HarnessResult } from "../../harness.js";
 import type { Entry, ToolCall, ToolResult } from "../../../session/entry.js";
-import type { Message, Model, ModelSteerResult } from "../../../model/model.js";
+import type { Message, Model, ModelRequest, ModelSteerResult } from "../../../model/model.js";
 import type { Delivery } from "../../../store/store.js";
 
 export interface NativeHarnessOptions {
@@ -179,7 +179,8 @@ export function createNativeHarness(options: NativeHarnessOptions): Harness {
         const cacheAfter = history.length - (history.at(-1)?.role === "system" ? 1 : 0);
         const generationId = crypto.randomUUID();
         const startedAt = new Date().toISOString();
-        const generation = options.model.generate({
+        const turn = context.context?.turn;
+        const request: ModelRequest = {
           messages: history,
           ...(context.tools ? { tools: context.tools.list() } : {}),
           ...(options.maxOutputTokens !== undefined ? { maxOutputTokens: options.maxOutputTokens } : {}),
@@ -187,7 +188,8 @@ export function createNativeHarness(options: NativeHarnessOptions): Harness {
           ...(options.effort ? { effort: options.effort } : {}),
           ...(cacheAfter > 0 ? { cacheAfter } : {}),
           signal: context.signal,
-        });
+        };
+        const generation = options.model.generate(request);
 
         const launched = new Set<string>();
         const steering = new Set<Promise<ModelSteerResult>>();
@@ -253,7 +255,7 @@ export function createNativeHarness(options: NativeHarnessOptions): Harness {
             launched.add(delta.call.callId);
             await context.commit([{
               type: "assistant", runId, content: "", calls: [delta.call],
-              generation: { id: generationId, startedAt },
+              generation: { id: generationId, startedAt, ...(turn ? { turn } : {}) },
             }]);
             await startAsync(delta.call);
           }
@@ -264,7 +266,7 @@ export function createNativeHarness(options: NativeHarnessOptions): Harness {
           if (result.status === "rejected") inputForNext = true;
         }
 
-        for (const hook of context.hooks ?? []) await hook.afterModel?.(context, step.value);
+        for (const hook of context.hooks ?? []) await hook.afterModel?.(context, step.value, request);
         if (!step.value.ok) {
           await settlePending();
           if ((inputForNext || resultsForNextRequest) && step.value.error.retryable &&
@@ -284,7 +286,11 @@ export function createNativeHarness(options: NativeHarnessOptions): Harness {
           usage: response.usage,
           ...(response.providerState ? { providerState: response.providerState } : {}),
           generation: {
-            id: generationId, ...(response.model ? { model: response.model } : {}), startedAt, endedAt,
+            id: generationId,
+            ...(response.model ? { model: response.model } : {}),
+            startedAt,
+            endedAt,
+            ...(turn ? { turn } : {}),
           },
         }]);
 
