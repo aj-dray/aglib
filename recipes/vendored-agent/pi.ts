@@ -204,7 +204,7 @@ function transcriptFor(context: HarnessContext): unknown[] {
         ...(text ? [{ type: "text", text }] : []),
         ...calls.map((call) => ({
           type: "toolCall", id: call.callId, name: call.name,
-          arguments: safeJson(call.arguments),
+          arguments: JSON.parse(call.arguments) as unknown,
         })),
       ],
     });
@@ -276,4 +276,3 @@ const deltaOf = (event: unknown): string => {
   return shape.type === "text_delta" && typeof shape.delta === "string" ? shape.delta : "";
 };
 
-const safeJson = (raw: string): unknown => { try { return JSON.parse(raw); } catch { return {}; } };
