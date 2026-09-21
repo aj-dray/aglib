@@ -128,6 +128,36 @@ test("a call whose result never committed is closed, not left dangling", () => {
   expect(String((last as { content: string }).content)).toContain("did not report back");
 });
 
+test("a call the model malformed is rendered as JSON that still holds what it said", () => {
+  // A strict provider validates every call in the history it is handed, so one
+  // unparsable `arguments` string would fail every later request and leave the
+  // session permanently stuck. The log keeps the string; the projection does
+  // not send it raw.
+  const malformed = '{"to":"lee","body":"She said "yes" on the call"}';
+  const messages = toMessages({
+    instructions: "be useful",
+    entries: log(
+      { type: "run.started", runId: "r", input: "go" },
+      {
+        type: "assistant", runId: "r", content: "",
+        calls: [
+          { callId: "c1", name: "send", arguments: malformed },
+          { callId: "c2", name: "read", arguments: '{ "path": "a" }' },
+        ],
+      },
+      { type: "tool.finished", runId: "r", callId: "c1", result: { content: "Tool arguments are not valid JSON", isError: true } },
+      { type: "tool.finished", runId: "r", callId: "c2", result: { content: "a" } },
+    ),
+  });
+  const calls = messages.flatMap((message) => message.role === "assistant" ? message.calls ?? [] : []);
+  expect(calls.map((call) => call.callId)).toEqual(["c1", "c2"]);
+  const parsed = calls.map((call) => JSON.parse(call.arguments) as unknown);
+  expect(parsed[0]).toEqual({ _unparsed: malformed });
+  // A call that parses is sent as the model wrote it, byte for byte, so the
+  // cached prefix it sits in is not disturbed.
+  expect(calls[1]?.arguments).toBe('{ "path": "a" }');
+});
+
 test("a call in an open activation stays open for a live asynchronous result", () => {
   const messages = toMessages({
     instructions: "be useful",

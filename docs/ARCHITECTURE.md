@@ -120,7 +120,11 @@ session, and if that worker is somehow still alive its writes fail the compare-a
 A third change belongs to the projection rather than the store: an assistant turn holding a call
 with no result is closed with an explicit statement that the call did not report back. Some
 activation will always end between asking and answering — cancelled, interrupted, killed — and a
-session that cannot be projected is a session that is permanently stuck.
+session that cannot be projected is a session that is permanently stuck. A call whose `arguments`
+the model never finished as JSON is the same defect from the other side: the log keeps the string
+as sent, a strict provider validates every call in the history it is handed, and the projection
+renders that one as JSON that still holds the string, so every wire takes it and the model reads
+its own mistake beside the failure that named it.
 
 ## Resumption
 

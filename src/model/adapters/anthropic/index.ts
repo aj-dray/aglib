@@ -243,7 +243,7 @@ function encodeConversation(messages: readonly Message[], cacheAt: number, provi
         const spoken = textOf(message.content);
         if (spoken) content.push({ type: "text", text: spoken });
         for (const call of message.calls ?? []) {
-          content.push({ type: "tool_use", id: call.callId, name: call.name, input: safeJson(call.arguments) });
+          content.push({ type: "tool_use", id: call.callId, name: call.name, input: JSON.parse(call.arguments) as JsonValue });
         }
       }
       out.push({ role: "assistant", content });

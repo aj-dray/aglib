@@ -1,7 +1,10 @@
 import type { Content } from "../content.js";
 import type { From, ProviderState, Stored, ToolCall } from "./entry.js";
 
-/** A message as a provider takes it: built per turn from the log, never held. */
+/**
+ * A message as a provider takes it: built per turn from the log, never held.
+ * Every call's `arguments` parses here, whatever the log holds.
+ */
 export type Message =
   | { role: "system"; content: Content }
   | { role: "user"; content: Content }
@@ -95,7 +98,7 @@ export function toMessages(input: {
         messages.push({
           role: "assistant",
           content: entry.content,
-          ...(entry.calls?.length ? { calls: entry.calls } : {}),
+          ...(entry.calls?.length ? { calls: entry.calls.map(parseable) } : {}),
           ...(entry.providerState ? { providerState: entry.providerState } : {}),
         });
         for (const call of entry.calls ?? []) {
@@ -132,4 +135,18 @@ export function toMessages(input: {
   // this request only and must not be written into the cached prefix.
   if (input.context?.turn) messages.push({ role: "system", content: input.context.turn });
   return messages;
+}
+
+/**
+ * A call whose arguments the model never finished as JSON. The log keeps the
+ * string as it was sent, and dispatch has already answered it with a failure;
+ * but a strict provider validates every call in the history it is handed, and
+ * one it cannot parse fails the whole request — every request, since the
+ * history is replayed whole — which is a session nobody can use again. The
+ * projection renders it as JSON that still holds what was said, so the model
+ * reads its own mistake beside the result that named it, on any wire.
+ */
+function parseable(call: ToolCall): ToolCall {
+  try { JSON.parse(call.arguments); return call; }
+  catch { return { ...call, arguments: JSON.stringify({ _unparsed: call.arguments }) }; }
 }
