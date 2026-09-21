@@ -48,6 +48,8 @@ rewriting a cached prefix invalidates every following turn.
 
 The cached prefix includes the committed conversation as well as instructions and run context. Its boundary advances after each user input and tool result, stopping before the trailing turn context. The loop hands that boundary to the model as `cacheAfter`, and each wire does with it what its provider needs; [Choosing a model](#choosing-a-model) says which wires mark it and for which models.
 
+The turn context is projected as a system message after the conversation, and each wire sends it as its provider can cache around. The Anthropic wire keeps it a system message inside `messages`, leaving the hoisted `system` field to the leading run. The chat-completions wire (`createOpenAiCompatibleModel` and `createOpenRouterModel`) sends it as a `user` message with its text unchanged: OpenRouter folds every `system` message into Gemini's single `systemInstruction`, which Gemini's implicit cache treats as immutable, so a request ending in a system message reads nothing from cache even when repeated byte for byte — 0 tokens of a 15,138-token prefix — where the same line as a trailing user message reads 12,189, and DeepSeek behaves the same way. Only the role changes; a leading system message stays `system`.
+
 ## Keeping a long conversation in budget
 
 `createCompactionHook` in `Agent.hooks` folds older turns into a summary before a model call once the estimated request
