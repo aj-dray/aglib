@@ -216,12 +216,18 @@ function encodeEffort(
 function breakpoints(request: ModelRequest): ReadonlySet<number> {
   const boundary = request.cacheAfter;
   if (boundary === undefined) return new Set();
-  let lead = 0;
-  while (lead < request.messages.length && request.messages[lead]!.role === "system") lead += 1;
+  const lead = leadingSystem(request.messages);
   const marked = new Set<number>();
   if (lead > 0 && boundary >= lead) marked.add(0).add(lead - 1);
   if (boundary > lead && boundary <= request.messages.length) marked.add(boundary - 1);
   return marked;
+}
+
+/** How far the leading run of system messages reaches: the standing instructions and the run's context. */
+function leadingSystem(messages: readonly Message[]): number {
+  let lead = 0;
+  while (lead < messages.length && messages[lead]!.role === "system") lead += 1;
+  return lead;
 }
 
 function encodeConversation(
@@ -233,11 +239,24 @@ function encodeConversation(
     if (images.length) out.push({ role: "user", content: encodeContent(images) });
     images = [];
   };
+  const lead = leadingSystem(messages);
   messages.forEach((message, index) => {
     // The wire accepts only text in tool replies. Keep every reply in a parallel
     // batch adjacent before supplying its images as associated user content.
     if (message.role !== "tool") flush();
     const encoded = encodeMessage(message, provider);
+    // A system message past the leading run is the turn's context, which the
+    // projection places after the cache boundary so that the prefix before it
+    // can be read back. This wire sends it as `user`, its text unchanged.
+    // OpenRouter folds every `system` message into Gemini's one
+    // `systemInstruction`, and Gemini's implicit cache treats that instruction
+    // as immutable, so a request that ends in a `system` message reads nothing
+    // from cache — 0 tokens of a 15,138-token prefix, whether repeated byte for
+    // byte or with one line changed — where the same line as a trailing `user`
+    // message reads 12,189. DeepSeek does the same, 0 against 15,104; GLM reads
+    // 11,520 either way. In production that was Gemini 3.8 Flash falling from
+    // a nine-tenths daily cache share to none, at full input price every turn.
+    if (message.role === "system" && index >= lead) encoded["role"] = "user";
     if (marked.has(index)) mark(encoded);
     out.push(encoded);
     if (message.role === "tool" && typeof message.content !== "string") {

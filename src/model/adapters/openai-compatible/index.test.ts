@@ -11,9 +11,9 @@ import type { Message } from "../../../session/messages.js";
  * `src/model/conformance.ts` and runs against this adapter there. What is left
  * here is this wire's own: which of the two reasoning dialects it speaks,
  * where OpenRouter points, where a breakpoint lands for the models that need
- * one, and which of OpenRouter's two 402s is a wait. Sending both dialects is
- * not compatibility, because OpenAI rejects the request outright, so the
- * choice has to be exercised.
+ * one, what role a turn's context is sent under, and which of OpenRouter's two
+ * 402s is a wait. Sending both dialects is not compatibility, because OpenAI
+ * rejects the request outright, so the choice has to be exercised.
  */
 
 const answered = (): ReadableStream<Uint8Array> => {
@@ -362,6 +362,47 @@ test("a Claude asked for no boundary is sent no mark", async () => {
   const model = createOpenRouterModel({ apiKey: "k", model: "anthropic/claude-opus-5", fetch });
   await collect(model.generate({ messages: prefixed }));
   expect(marks(sent[0]!.body)).toBe(0);
+});
+
+// ---- The turn's context -----------------------------------------------------
+
+const turn = "It is Monday 21 September. This run has spent $0.15.";
+
+/**
+ * A `system` message after the conversation began would be folded into
+ * Gemini's `systemInstruction` by OpenRouter, and Gemini's cache treats that
+ * as immutable: the whole prefix is read at full price on every turn. As a
+ * `user` message it leaves the prefix reusable, and the text is not the
+ * adapter's to rewrite.
+ */
+test("a system message after the conversation began is sent as a user message, its text unchanged", async () => {
+  const { fetch, sent } = capturing();
+  const model = createOpenRouterModel({ apiKey: "k", model: "google/gemini-3.8-flash", fetch });
+  await collect(model.generate({ messages: [...prefixed, { role: "system", content: turn }], cacheAfter: 5 }));
+
+  const messages = sent[0]!.body["messages"] as { role: string; content: unknown }[];
+  expect(messages.map((message) => message.role)).toEqual(["system", "system", "user", "assistant", "user", "user"]);
+  expect(messages.at(-1)).toEqual({ role: "user", content: turn });
+  expect(messages[0]!.content).toBe("You are a bookkeeper.");
+});
+
+test("a Claude's three marks land where they did when a turn's context follows the boundary", async () => {
+  const { fetch, sent } = capturing();
+  const model = createOpenRouterModel({ apiKey: "k", model: "anthropic/claude-opus-5", fetch });
+  await collect(model.generate({ messages: [...prefixed, { role: "system", content: turn }], cacheAfter: 5 }));
+
+  const messages = sent[0]!.body["messages"] as { role: string; content: unknown }[];
+  expect(messages[0]!.content).toEqual([
+    { type: "text", text: "You are a bookkeeper.", cache_control: { type: "ephemeral" } },
+  ]);
+  expect(messages[1]!.content).toEqual([
+    { type: "text", text: "Remembered: the ledger closes Friday.", cache_control: { type: "ephemeral" } },
+  ]);
+  expect(messages[4]!.content).toEqual([
+    { type: "text", text: "Thanks.", cache_control: { type: "ephemeral" } },
+  ]);
+  expect(messages[5]).toEqual({ role: "user", content: turn });
+  expect(marks(sent[0]!.body)).toBe(3);
 });
 
 // ---- Waits ----------------------------------------------------------------
