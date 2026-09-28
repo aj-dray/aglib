@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { WebSocketServer, type WebSocket } from "ws";
 import type { ResponsesClientEvent, ResponsesServerEvent } from "openai/resources/responses/responses";
 import type { ModelDelta, ModelGeneration, ModelResponse } from "../../model.js";
 import type { Result } from "../../../result.js";
@@ -456,4 +457,89 @@ test("capabilities are absent unless explicitly enabled", () => {
   expect(model.asyncTools).toBeUndefined();
   expect(model.generate({ messages: [] }).steer).toBeUndefined();
   model.close();
+});
+
+/**
+ * The official SDK over a real socket, so what it does with a server `error`
+ * event is the SDK's and not a fake's: it raises the event as an error beside
+ * a socket failure, and only the socket failing may end every generation.
+ */
+async function responsesServer(): Promise<{
+  baseURL: string;
+  creates: Array<{ socket: WebSocket; lane: string }>;
+  stop(): void;
+}> {
+  const server = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+  await new Promise<void>((resolve) => server.once("listening", () => resolve()));
+  const creates: Array<{ socket: WebSocket; lane: string }> = [];
+  server.on("connection", (socket) => {
+    socket.on("message", (data) => {
+      const event = JSON.parse(String(data)) as { type?: string; stream_id?: string };
+      if (event.type === "response.create" && event.stream_id) creates.push({ socket, lane: event.stream_id });
+    });
+  });
+  const { port } = server.address() as { port: number };
+  return {
+    baseURL: `http://127.0.0.1:${port}/v1`,
+    creates,
+    // Not awaiting the server's close, which waits on sockets Bun's `ws` shim never reports closed.
+    stop: () => {
+      for (const client of server.clients) client.terminate();
+      server.close();
+    },
+  };
+}
+
+async function eventually(condition: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 200 && !condition(); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  if (!condition()) throw new Error("condition did not become true");
+}
+
+test("an error event naming one response fails only that generation, with the provider's status, type and code", async () => {
+  const server = await responsesServer();
+  const model = createOpenAiResponsesModel({ apiKey: "k", model: "gpt-6-astra", baseURL: server.baseURL });
+  try {
+    const refused = drain(model.generate({ messages: [{ role: "user", content: "refused" }] }));
+    const answered = drain(model.generate({ messages: [{ role: "user", content: "answered" }] }));
+    await eventually(() => server.creates.length === 2);
+    const [first, second] = server.creates as [{ socket: WebSocket; lane: string }, { socket: WebSocket; lane: string }];
+    first.socket.send(JSON.stringify({
+      type: "error", status: 429, stream_id: first.lane,
+      error: { type: "insufficient_quota", code: "insufficient_quota", message: "You exceeded your current quota.", param: null },
+    }));
+    second.socket.send(JSON.stringify({ ...created(second.lane, "resp_2") }));
+    second.socket.send(JSON.stringify({ type: "response.output_text.delta", stream_id: second.lane, delta: "still here" }));
+    second.socket.send(JSON.stringify(completed(second.lane, "resp_2")));
+
+    const [failed, succeeded] = await Promise.all([refused, answered]);
+    expect(failed.result).toEqual({
+      ok: false,
+      error: {
+        code: "failed", message: "You exceeded your current quota.", retryable: false,
+        status: 429, errorType: "insufficient_quota", errorCode: "insufficient_quota",
+      },
+    });
+    expect(succeeded.result.ok && succeeded.result.value.message.content).toBe("still here");
+  } finally {
+    model.close();
+    server.stop();
+  }
+});
+
+test("the socket failing fails every generation sharing it", async () => {
+  const server = await responsesServer();
+  const model = createOpenAiResponsesModel({ apiKey: "k", model: "gpt-6-astra", baseURL: server.baseURL });
+  try {
+    const generations = [
+      drain(model.generate({ messages: [{ role: "user", content: "one" }] })),
+      drain(model.generate({ messages: [{ role: "user", content: "two" }] })),
+    ];
+    await eventually(() => server.creates.length === 2);
+    server.creates[0]!.socket.terminate();
+    const outcomes = await Promise.all(generations);
+    expect(outcomes.map((outcome) => outcome.result.ok || outcome.result.error.code)).toEqual(["provider", "provider"]);
+  } finally {
+    model.close();
+    server.stop();
+  }
 });

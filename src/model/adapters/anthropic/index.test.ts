@@ -236,3 +236,22 @@ test("an overloaded provider is waited out before the first delta", async () => 
   expect(outcome.ok).toBe(true);
   expect(attempts).toBe(3);
 });
+
+test("a refusal keeps the provider's status, error type and details code", async () => {
+  const model = createAnthropicModel({
+    apiKey: "k", model: "claude-opus-5",
+    fetch: (async () => new Response(JSON.stringify({
+      type: "error",
+      error: {
+        type: "rate_limit_error", message: "You have reached your API usage limits.",
+        details: { error_code: "enforced_spend_limit_reached" },
+      },
+    }), { status: 400 })) as unknown as typeof fetch,
+  });
+  const outcome = await collect(model.generate({ messages: conversation }));
+  expect(outcome.ok).toBe(false);
+  if (outcome.ok) return;
+  expect(outcome.error).toMatchObject({
+    code: "failed", status: 400, errorType: "rate_limit_error", errorCode: "enforced_spend_limit_reached",
+  });
+});

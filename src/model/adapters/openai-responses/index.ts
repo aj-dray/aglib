@@ -124,13 +124,13 @@ class ResponsesHub {
   async #read(): Promise<void> {
     try {
       for await (const envelope of this.#connection) {
-        if (envelope.type === "message" && envelope.message) {
-          const event = envelope.message as unknown as Record<string, unknown>;
+        const event = envelope.type === "message" ? record(envelope.message) : sentError(envelope);
+        if (event) {
           const lane = string(event["stream_id"]);
           if (lane) {
-            this.#lanes.get(lane)?.queue.push(envelope);
+            this.#lanes.get(lane)?.queue.push({ type: "message", message: event });
           } else if (string(event["type"]) === "error") {
-            this.#broadcast(envelope);
+            this.#broadcast({ type: "message", message: event });
           } else if (this.#lanes.size === 1) {
             this.#lanes.values().next().value?.queue.push(envelope);
           } else {
@@ -185,6 +185,19 @@ class ResponsesHub {
     this.#lanes.clear();
     this.#onEnd();
   }
+}
+
+/**
+ * The provider's `error` event, when that is what an error envelope carries.
+ * The SDK raises a server `error` event as an error envelope beside a socket's
+ * own failures, keeping the event on the error it raises; an event is one
+ * response's failure, or every response's when it names no lane, and the
+ * connection it arrived on is still open. Anything else is the socket failing.
+ */
+function sentError(envelope: StreamEnvelope): Record<string, unknown> | undefined {
+  if (envelope.type !== "error") return undefined;
+  const event = record(record(envelope.error)?.["error"]);
+  return event?.["type"] === "error" ? event : undefined;
 }
 
 class EnvelopeQueue implements AsyncIterableIterator<StreamEnvelope> {
@@ -780,20 +793,28 @@ function addUsage(left: Usage, right: Usage): Usage {
 
 function responseFailure(response: Record<string, unknown> | undefined): ModelError {
   const error = record(response?.["error"]);
+  const errorCode = string(error?.["code"]);
   return {
     code: "provider",
     message: string(error?.["message"]) ?? "Responses generation failed",
     retryable: true,
+    ...(errorCode ? { errorCode } : {}),
   };
 }
 
+/** An `error` event: a command's, with its detail under `error`, or a streaming one, with it on the event. */
 function eventError(event: Record<string, unknown>): ModelError {
-  const error = record(event["error"]);
-  const code = string(error?.["code"]);
+  const error = record(event["error"]) ?? event;
+  const errorCode = string(error["code"]);
+  const errorType = string(error["type"]);
+  const status = number(event["status"]);
   return {
-    code: code === "rate_limit_exceeded" ? "rate-limit" : "failed",
-    message: string(error?.["message"]) ?? "Responses command failed",
-    retryable: code === "rate_limit_exceeded" || code === "server_error" || code === "response_not_found",
+    code: errorCode === "rate_limit_exceeded" ? "rate-limit" : "failed",
+    message: string(error["message"]) ?? "Responses command failed",
+    retryable: errorCode === "rate_limit_exceeded" || errorCode === "server_error" || errorCode === "response_not_found",
+    ...(status !== undefined ? { status } : {}),
+    ...(errorType && errorType !== "error" ? { errorType } : {}),
+    ...(errorCode ? { errorCode } : {}),
   };
 }
 

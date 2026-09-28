@@ -168,7 +168,7 @@ What counts as a wait is a status or structured metadata, never a message: 408, 
 
 The bounds: at most four retries per request. A wait is `Retry-After` when the provider sends one, as seconds or an HTTP date, honoured up to 120 s; otherwise full-jitter backoff over a ceiling that starts at 1 s and doubles each retry, never past 30 s. No request waits more than 180 s in total, and a wait that would pass that is not taken. An aborted `signal` ends a wait at once and the generation reports `cancelled`. When the retries run out the error keeps a retryable code — `rate-limit` for 429 and the in-flight 402, `provider` for the rest — because the provider never said the request was wrong, and a caller with more time than the adapter is told so.
 
-A failure after the first delta is not retried by the adapter: partial output has already reached the caller, and whether to ask again is the loop's decision, which continues past a retryable failure when it has new input to send. The Responses adapter holds a WebSocket rather than making an HTTP request per generation, so neither this nor the OpenAI SDK's own HTTP retry sees its generations; a `rate_limit_exceeded` event there fails the generation as `rate-limit`, retryable, and is not retried.
+A failure after the first delta is not retried by the adapter: partial output has already reached the caller, and whether to ask again is the loop's decision, which continues past a retryable failure when it has new input to send. The Responses adapter holds a WebSocket rather than making an HTTP request per generation, so neither this nor the OpenAI SDK's own HTTP retry sees its generations; a `rate_limit_exceeded` event there fails the generation as `rate-limit`, retryable, and is not retried. An `error` event that names its response's `stream_id` fails that generation alone, and one that names none fails every generation then on the connection; only the socket itself failing ends the connection, and with it every generation sharing it.
 
 ## Waiting for work
 
@@ -241,6 +241,7 @@ made to prove a process in the box cannot read the value.
 
 Expected outcomes are discriminated data with stable codes. Every unsupported capability says what
 is missing. A developer never inspects error-message text to choose behaviour.
+A `ModelError` also carries what the provider itself said, where it said it — the HTTP status or the status on its error event as `status`, its error `type` as `errorType`, its string error `code` as `errorCode` — so a caller that must tell apart two failures `code` does not, such as a spent balance and a rate limit, reads fields rather than the message.
 
 For the person using the application: committed content never disappears after a reconnect or a
 restart, streaming text is visibly provisional until committed, and refusal, cancellation and
