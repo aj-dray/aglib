@@ -60,8 +60,20 @@ export interface ModelResponse {
   providerState?: ProviderState;
 }
 
+/**
+ * `code` is aglib's reading of the failure. `status`, `errorType` and
+ * `errorCode` are the provider's own, as it sent them, for a caller whose
+ * decision turns on something `code` does not distinguish — a spent balance
+ * from a rate limit, say — so that caller reads fields rather than `message`.
+ */
 export interface ModelError extends Failure {
   code: "auth" | "rate-limit" | "context-length" | "cancelled" | "provider" | "failed";
+  /** The HTTP status of the refusal, or the one the provider's error event carried. */
+  status?: number;
+  /** The provider's error `type`, when its error body or event named one. */
+  errorType?: string;
+  /** The provider's error `code` (Anthropic's `details.error_code`), when it named one as a string. */
+  errorCode?: string;
 }
 
 /**

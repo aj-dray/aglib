@@ -513,3 +513,22 @@ test("a cache write OpenRouter reports is counted apart from the prompt it was i
     expect(outcome.value.usage).toEqual({ inputTokens: 19, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 12_253 });
   }
 });
+
+test("a refusal keeps the provider's status, type and code, read from the whole body", async () => {
+  // Past the 400 characters the message keeps, so the fields are not read from it.
+  const padded = "You exceeded your current quota. ".repeat(20);
+  const wire = refusing([429, 429, 429, 429, 429], JSON.stringify({ error: { message: padded, type: "insufficient_quota", param: null, code: "insufficient_quota" } }));
+  const outcome = await collect(createOpenAiCompatibleModel({
+    apiKey: "k", baseUrl: "https://api.example.test/v1", model: "acme/one", fetch: wire.fetch,
+  }).generate({ messages: conversation }));
+  expect(outcome.ok).toBe(false);
+  if (outcome.ok) return;
+  expect(outcome.error).toMatchObject({ status: 429, errorType: "insufficient_quota", errorCode: "insufficient_quota" });
+
+  // OpenRouter's code is the status again, as a number, so it is not a second field for it.
+  const skint = await collect(
+    createOpenRouterModel({ apiKey: "k", model: "acme/one", fetch: refusing([402], broke).fetch }).generate({ messages: conversation }),
+  );
+  expect(skint.ok || skint.error.status).toBe(402);
+  expect(skint.ok || skint.error.errorCode).toBeUndefined();
+});

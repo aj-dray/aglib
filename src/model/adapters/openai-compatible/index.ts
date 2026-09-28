@@ -453,11 +453,25 @@ async function httpError(response: Response, isWait: RetryOptions["isWait"]): Pr
     : wait && (response.status === 429 || response.status === 402) ? "rate-limit"
     : wait ? "provider"
     : "failed";
+  const said = errorBody(body);
+  const errorType = said?.["type"];
+  const errorCode = said?.["code"];
   return {
     code,
     message: `${response.status} ${response.statusText}${body ? `: ${body.slice(0, 400)}` : ""}`,
     retryable: wait,
+    status: response.status,
+    ...(typeof errorType === "string" ? { errorType } : {}),
+    ...(typeof errorCode === "string" ? { errorCode } : {}),
   };
+}
+
+/** The `error` object of a refusal's JSON body, when it has one; read whole, not the cut the message keeps. */
+function errorBody(body: string): Record<string, unknown> | undefined {
+  let parsed: unknown;
+  try { parsed = JSON.parse(body); } catch { return undefined; }
+  const error = parsed !== null && typeof parsed === "object" ? (parsed as { error?: unknown }).error : undefined;
+  return error !== null && typeof error === "object" && !Array.isArray(error) ? error as Record<string, unknown> : undefined;
 }
 
 function transportError(error: unknown, signal?: AbortSignal): ModelError {
