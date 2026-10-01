@@ -27,6 +27,17 @@ export interface OpenAiCompatibleOptions {
    */
   cacheBreakpoint?: "cache_control" | "none";
   /**
+   * The conversation this model is serving, sent as `prompt_cache_key` on every
+   * request. A provider that caches a prefix per backend routes requests that
+   * share a key to the backend holding it; without one a growing conversation
+   * lands on a different backend each turn and reads almost none of it back.
+   * Meta's Muse Spark behind OpenRouter is the case measured: 3% of a
+   * conversation's prefix read from cache without it, 91% with it. Set only
+   * where the endpoint takes the field — plain OpenAI chat completions does
+   * not — so the default sends none.
+   */
+  promptCacheKey?: string;
+  /**
    * A refusal this endpoint means as a wait, beyond the statuses every HTTP
    * wire means so. Retried before the first delta like those, and reported as
    * a rate limit when the retries run out.
@@ -64,6 +75,7 @@ export function createOpenAiCompatibleModel(options: OpenAiCompatibleOptions): M
             ...(request.maxOutputTokens !== undefined ? { max_tokens: request.maxOutputTokens } : {}),
             ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
             ...encodeEffort(request.effort, options.effortParameter ?? "reasoning_effort"),
+            ...(options.promptCacheKey ? { prompt_cache_key: options.promptCacheKey } : {}),
             stream: true,
             stream_options: { include_usage: true },
           }),
@@ -170,7 +182,7 @@ export function createOpenAiCompatibleModel(options: OpenAiCompatibleOptions): M
  * wait. The body's structured `error.metadata.reason` tells them apart.
  */
 export function createOpenRouterModel(input: {
-  apiKey: string; model: string; appUrl?: string; appName?: string; fetch?: typeof fetch;
+  apiKey: string; model: string; appUrl?: string; appName?: string; promptCacheKey?: string; fetch?: typeof fetch;
 }): Model {
   return createOpenAiCompatibleModel({
     apiKey: input.apiKey,
@@ -179,6 +191,7 @@ export function createOpenRouterModel(input: {
     effortParameter: "reasoning",
     cacheBreakpoint: /^~?anthropic\//.test(input.model) ? "cache_control" : "none",
     isWait: inFlightBudgetExhausted,
+    ...(input.promptCacheKey ? { promptCacheKey: input.promptCacheKey } : {}),
     headers: {
       ...(input.appUrl ? { "http-referer": input.appUrl } : {}),
       ...(input.appName ? { "x-title": input.appName } : {}),
