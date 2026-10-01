@@ -108,6 +108,18 @@ test("OpenRouter is this wire with a fixed base URL, its dialect, and attributio
   expect(sent[0]!.body["reasoning"]).toEqual({ effort: "low" });
 });
 
+test("a prompt cache key is sent as the body field, and only when one was given", async () => {
+  const { fetch, sent } = capturing();
+  const keyed = createOpenRouterModel({ apiKey: "k", model: "acme/one", promptCacheKey: "work-1", fetch });
+  const bare = createOpenRouterModel({ apiKey: "k", model: "acme/one", fetch });
+  await collect(keyed.generate({ messages: conversation }));
+  await collect(bare.generate({ messages: conversation }));
+
+  // A header or `session_id` does not route this wire's cache: only this field was measured to.
+  expect(sent[0]!.body["prompt_cache_key"]).toBe("work-1");
+  expect("prompt_cache_key" in sent[1]!.body).toBe(false);
+});
+
 test("usage is asked for on the stream, because it arrives on a frame of its own", async () => {
   const { fetch, sent } = capturing();
   const model = createOpenAiCompatibleModel({
