@@ -208,6 +208,13 @@ still running; a later failure cannot misattribute or erase the earlier delivery
 tools declared `concurrent` run together and may finish out of order; every other call keeps its
 declared order.
 
+The native loop folds incoming `turn` deliveries after the foreground batch settles,
+keeping its tool results contiguous even though each completion commits separately.
+On read, the projection groups committed synchronous results directly after their
+assistant calls, in completion order, so older logs with a delivery splitting a batch
+remain usable. The durable log keeps arrival order; declared asynchronous results stay
+at their recorded position because work may have continued while they were pending.
+
 A `Delivery` carries four things beyond its content:
 
 | Field | Why it exists |

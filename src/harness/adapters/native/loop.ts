@@ -131,7 +131,6 @@ export function createNativeHarness(options: NativeHarnessOptions): Harness {
           }
           if (event.value.done) return;
           await finish(event.value.value);
-          await context.drain?.();
           next = iterator.next();
         }
       };
@@ -341,6 +340,8 @@ export function createNativeHarness(options: NativeHarnessOptions): Harness {
           for (const call of calls) await finish(await executeOne(context, call));
         }
 
+        // Results commit individually, but incoming turn deliveries must wait
+        // until the foreground batch settles so they cannot split its replies.
         const arrived = await context.drain?.() ?? 0;
         if (synchronous.length || arrived || inputForNext || resultsForNextRequest || (calls.length && !context.tools)) continue;
 

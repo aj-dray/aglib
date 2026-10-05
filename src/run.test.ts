@@ -633,6 +633,120 @@ test("a message arriving mid-activation is folded in without ending the turn", a
   expect(after.value.entries.filter((entry) => entry.type === "run.finished")).toHaveLength(1);
 });
 
+test.each([false, true])("a turn delivery waits for contiguous batch results (reverse calls: %s)", async (reverse) => {
+  const store = createSqliteStore({ database: new Database(":memory:") });
+  await store.create({ sessionId: "peer", agent: { id: "a", version: "1" } });
+  const calls = [
+    { callId: "c1", name: "deliver", arguments: "{}" },
+    { callId: "c2", name: "settle", arguments: "{}" },
+  ];
+  const fake = createFakeModel([
+    { calls: reverse ? calls.toReversed() : calls },
+    { text: "done" },
+  ]);
+  const requests: ModelRequest[] = [];
+  const model: Model = { id: fake.id, generate(request) { requests.push(request); return fake.generate(request); } };
+
+  let committed!: () => void;
+  const firstCommitted = new Promise<void>((resolve) => { committed = resolve; });
+  const deliver = defineTool({
+    name: "deliver", description: "deliver", concurrent: true, schema: z.object({}),
+    execute: async () => {
+      const written = await store.append({ sessionId: "peer", expectedSeq: 0, entries: [], enqueue: [
+        { sessionId: "s", input: "Correction: Friday", priority: "turn" },
+      ] });
+      if (!written.ok) throw new Error(written.error.message);
+      return { content: "sent" };
+    },
+  });
+  // The second call cannot finish until the first result is durable. This
+  // also proves that each completion commits without waiting for its neighbor.
+  const settle = defineTool({
+    name: "settle", description: "settle", concurrent: true, schema: z.object({}),
+    execute: async () => {
+      await firstCommitted;
+      return { content: "settled" };
+    },
+  });
+
+  const run = runAgent({
+    agent: agentWith(model, { tools: [deliver, settle] }), store, sessionId: "s", input: "Which day?",
+  });
+  for await (const update of run) {
+    if (update.type === "entry" && update.entry.type === "tool.finished" && update.entry.callId === "c1") {
+      committed();
+    }
+  }
+  const result = await run.result;
+  expect(result.status).toBe("completed");
+  expect(requests).toHaveLength(2);
+  const tail = requests[1]!.messages.slice(-4).map((message) =>
+    message.role === "tool" ? `tool ${message.callId}` : message.role);
+  expect(tail).toEqual(["assistant", "tool c1", "tool c2", "user"]);
+  expect(textOf(requests[1]!.messages.at(-1)!.content)).toBe("Correction: Friday");
+  // Projection repairs old split logs; the writer must also prevent new ones.
+  const saved = await store.read({ sessionId: "s" });
+  if (!saved.ok) throw new Error("read failed");
+  expect(saved.value.entries.filter((entry) => entry.type === "run.started" || entry.type === "tool.finished")
+    .map((entry) => entry.type === "tool.finished" ? `tool ${entry.callId}` : "user"))
+    .toEqual(["user", "tool c1", "tool c2", "user"]);
+});
+
+test("an application interrupt during a batch preserves its results before the next input", async () => {
+  const store = createSqliteStore({ database: new Database(":memory:") });
+  const requests: ModelRequest[] = [];
+  const fake = createFakeModel([
+    { calls: [
+      { callId: "c1", name: "send", arguments: "{}" },
+      { callId: "c2", name: "wait", arguments: "{}" },
+    ] },
+    { text: "Corrected" },
+  ]);
+  const model: Model = { id: fake.id, generate(request) { requests.push(request); return fake.generate(request); } };
+  const send = defineTool({
+    name: "send", description: "send", concurrent: true, schema: z.object({}),
+    execute: (_, context) => {
+      context.enqueue({ sessionId: "s", input: "Use Friday", priority: "interrupt" });
+      return { content: "sent" };
+    },
+  });
+  const wait = defineTool({
+    name: "wait", description: "wait", concurrent: true, schema: z.object({}),
+    execute: async (_, { signal }) => {
+      await new Promise<void>((resolve) => {
+        if (signal.aborted) resolve();
+        else signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+      throw new Error("Interrupted after execution began");
+    },
+  });
+  const agent = agentWith(model, { tools: [send, wait] });
+  const run = runAgent({ agent, store, sessionId: "s", input: "Which day?" });
+  for await (const update of run) {
+    if (update.type === "entry" && update.entry.type === "tool.finished" && update.entry.callId === "c1") {
+      // The application owns ending the activation, not the delivery queue.
+      run.cancel();
+    }
+  }
+  expect((await run.result).status).toBe("cancelled");
+  expect(requests).toHaveLength(1);
+  const saved = await store.read({ sessionId: "s" });
+  if (!saved.ok) throw new Error("read failed");
+  expect(saved.value.pending.map((delivery) => delivery.input)).toEqual(["Use Friday"]);
+  expect(saved.value.entries.filter((entry) => entry.type === "tool.finished").map((entry) => entry.callId))
+    .toEqual(["c1", "c2"]);
+  expect(saved.value.entries.find((entry) => entry.type === "tool.finished" && entry.callId === "c2"))
+    .toMatchObject({ result: { isError: true, uncertain: true } });
+
+  const claimed = await store.next({});
+  if (!claimed.ok || !claimed.value) throw new Error("expected the interrupt delivery");
+  expect((await runAgent({ agent, store, claim: claimed.value }).result).status).toBe("completed");
+  const tail = requests[1]!.messages.slice(-4).map((message) =>
+    message.role === "tool" ? `tool ${message.callId}` : message.role);
+  expect(tail).toEqual(["assistant", "tool c1", "tool c2", "user"]);
+  expect(requests[1]!.messages.at(-1)).toEqual({ role: "user", content: "Use Friday" });
+});
+
 test("a run that keeps calling tools folds without waiting to end", async () => {
   // The shape that could not compact: inside one activation every assistant turn
   // holds calls until the one that ends the run, so the only log big enough to
