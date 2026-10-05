@@ -208,6 +208,9 @@ still running; a later failure cannot misattribute or erase the earlier delivery
 tools declared `concurrent` run together and may finish out of order; every other call keeps its
 declared order.
 
+The native loop folds incoming `turn` deliveries after the foreground batch settles,
+keeping its tool results contiguous even though each completion commits separately.
+
 A `Delivery` carries four things beyond its content:
 
 | Field | Why it exists |
