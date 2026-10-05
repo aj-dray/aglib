@@ -1,24 +1,39 @@
 # Proposal: an answer of a given shape, from any model — Jev included
 
-> **Status: proposal, for decision.** This file lives on a branch for review only. `AGENTS.md`
-> says plans live outside the repository, so it should not merge as-is: if it is accepted, its
-> content lands as edits to `INTERFACE.md` and `ARCHITECTURE.md` in the implementing PR, and this
-> file is deleted. Written 2026-10-05 against `main` at `b25efbe` (v0.6.5).
+> **Status: proposal; four decisions taken, one still open.** This file lives on a branch for
+> review only. `AGENTS.md` says plans live outside the repository, so it should not merge as-is: if
+> it is accepted, its content lands as edits to `INTERFACE.md`, `ARCHITECTURE.md` and `CODE.md` in
+> the implementing PR, and this file is deleted. Written 2026-10-05 against `main` at `b25efbe`
+> (v0.6.5). It was revised the same day for Adam's decisions on the Jev adapter's home, on
+> `probabilities`, on structured input and on `defineOutput` (§9).
 
 ## The recommendation in one paragraph
 
-Add **one optional field to `ModelRequest`, `output`: the JSON Schema the answer must satisfy.**
-Leave it out and you get free text, as today. Each adapter sends the schema the way its provider
-expects it. An LLM wire uses that provider's structured-output parameter. A new Typesafe adapter
-turns a schema made of described choices into Jev `questions`. Any schema it cannot express, and
-any request for free text or tools, **fails typed as `unsupported`**. The answer is always a JSON
-document in `message.content`. `ModelResponse` gains one observation, `probabilities`, which is
-present only when the provider reported it (Jev does). The typed result comes from
-`defineOutput({ schema })`, a zod declaration built the same way `defineTool` is: it gives you the
-JSON Schema to send and a `parse` that returns `Result<T, …>`. Usage and cost reach the caller on
-`ModelResponse.usage`, as they already do, so nothing changes for accounting. The result is one call
-shape, `model.generate(request)`. Jev is a provider behind it with no special case, and the same
-decision request can run on Jev or on DeepSeek. That is the comparison the detector eval made by hand.
+**Structured in, structured out, with one call shape.**
+
+- **Structured out.** `ModelRequest` gains one optional field, `output`: the JSON Schema the answer
+  must satisfy. Leave it out and you get free text, as today. Each adapter sends the schema the way
+  its provider expects it:
+  - an LLM wire uses that provider's structured-output parameter;
+  - a new in-package Typesafe adapter turns a schema of described choices into Jev `questions`.
+
+  Any schema an adapter cannot express, and any request for free text or tools on Jev, **fails
+  typed as `unsupported`**. The answer is always a JSON document in `message.content`.
+- **Structured in.** `ContentPart` gains `{ type: "json"; value }`, so a caller can hand a model an
+  object rather than a string it flattened. The Typesafe adapter passes that object to Jev as
+  `state`, unchanged. Every LLM wire sends it as its one serialised text. So the same request still
+  works on every provider.
+- **Probabilities.** `ModelResponse` gains one observation, `probabilities`. It is present only when
+  the provider reported it, which Jev does.
+- **The typed result.** It comes from `defineOutput({ schema })`, a zod declaration built the same
+  way `defineTool` is. It gives you the JSON Schema to send and a `parse` that returns
+  `Result<T, …>`.
+- **Accounting.** Usage and cost reach the caller on `ModelResponse.usage`, as they already do.
+  Nothing changes.
+
+The call shape stays `model.generate(request)`. Jev is a provider behind it with no special case,
+and the same decision request, with the same object as input, can run on Jev or on DeepSeek. That
+is the comparison the detector eval made by hand.
 
 ## Corrections to the brief
 
@@ -243,6 +258,52 @@ z.union([z.literal("PLAIN").describe("…"), z.literal("FILTER").describe("…")
 (Checked against the zod 4 already in `package.json`. `z.object` also emits `required` for every
 field and `additionalProperties: false`, which is what strict modes require.)
 
+### Structured input: a `json` content part
+
+What a decision is *about* is often already an object: a query with its tenant's record types, a
+tool call with its arguments, a row. Today the only way to give one to a model is to flatten it
+into a string. Each caller then picks its own flattening, and a provider that takes structure
+natively, as Jev does with `state`, is handed a string it has to read back as data. So the input
+side gets the same treatment as the output side: one representation, and each wire does what its
+provider needs with it.
+
+```ts
+// src/content.ts
+export type ContentPart =
+  | { type: "text"; text: string }
+  | { type: "image"; mediaType: string; source: ContentSource }
+  | { type: "file"; mediaType: string; name?: string; source: ContentSource }
+  /**
+   * A value given to the model as data rather than prose. A wire whose provider
+   * takes structure (Typesafe's `state`) sends it unchanged. Every other wire
+   * sends it as text, using `textOf`'s serialisation, so it is never dropped and
+   * never spelled two ways.
+   */
+  | { type: "json"; value: JsonValue }
+  | { type: "opaque"; provider: string; data: JsonValue };
+```
+
+The rules that follow from it:
+
+- **`textOf` includes it.** `textOf` is "the model-visible text of some content", and a `json`
+  part is model-visible. So `textOf` serialises it with `JSON.stringify(value)`: compact, with keys
+  in the order the caller built them. That is the one place the serialisation is written. Today
+  `textOf` keeps text parts only, so this is a change to it, not an addition. Every caller of
+  `textOf` (compaction's estimate, `render`, the tool-reply text on the chat wire) then counts and
+  shows the value rather than silently losing it.
+- **Every LLM wire sends it as a text part, in place.** The part stays where it was among the
+  others, so a message of text, then an object, then text arrives in that order. The three wires
+  each have an `if (part.type === …)` chain that silently drops a kind it does not know.
+  `json` must get a branch in each of them. The conformance case below exists because forgetting
+  one is invisible to the type checker.
+- **`opaque` is not the same thing.** An `opaque` part is a provider's own block, kept so it can be
+  handed back and never shown to the model. A `json` part is the caller's data, and it is always
+  shown to the model. Different facts, so different kinds.
+- **It is allowed wherever `Content` is.** That covers user input, a delivery, a tool result and
+  `context.run`. It is durable in the log like any other part, because a `JsonValue` survives
+  storage by definition. `render` draws it as its serialised text.
+- **An assistant answer stays text.** See rejected alternative 12 for why.
+
 ### The typed result: `defineOutput`
 
 `defineTool` already turns a zod schema into a JSON Schema for the wire and a validator for what
@@ -271,6 +332,25 @@ export function defineOutput<TSchema extends z.ZodType>(input: { schema: TSchema
 of the error, because the caller is still holding the `ModelResponse`. **A paid call that produced
 an unusable answer can therefore still be recorded.** aglib does not retry an invalid answer:
 whether a second paid call is worth it is the caller's decision, as with every other refusal.
+
+**One conversion, not two.** `defineTool` and `defineOutput` both turn a zod schema into JSON
+Schema for the wire and check a raw value against it. Today `defineTool` does this inline: it calls
+`z.toJSONSchema` and then `safeParse`/`prettifyError` in `prepare`. Both declarations will call one
+internal module instead, `src/schema.ts`. It is exported from no subpath, so it is not public
+surface, and it imports only zod, `json.ts` and `result.ts`, so `tools` and `model` can both depend
+on it without crossing the module direction:
+
+```ts
+// src/schema.ts: internal
+export function jsonSchemaOf(schema: z.ZodType): JsonValue;                      // z.toJSONSchema, once
+export function check<T extends z.ZodType>(schema: T, raw: unknown): Result<z.output<T>, string>;  // safeParse + prettifyError
+```
+
+`defineTool` keeps its signature and behaviour exactly: `spec.parameters` is `jsonSchemaOf(schema)`,
+and `prepare` maps `check`'s error to the same `Invalid arguments for <name>: …` tool result.
+`defineOutput.parse` maps the same error to `invalid-output`. So if the zod-to-JSON-Schema settings
+ever change (an `io` mode, a target draft, stripping `$schema`), they change for tool arguments and
+answers together, and the two cannot drift.
 
 ### What each adapter does with `output`
 
@@ -318,12 +398,20 @@ The fields it can express are:
 | `anyOf`/`oneOf` of `{ const: string, description? }`, or `enum: string[]` | `{ type: "choice", criteria: { [const]: description ?? null }, instructions: field.description }` | `answers[k].choice` |
 | `type: "boolean"` | `{ type: "noul", instructions: field.description }` | `answers[k].noul >= 0.5` (probabilities `{ true: p, false: 1 - p }`) |
 
-- **State.** `state` is the conversation's text. A single user message becomes its text. Several
-  messages become `[{ role, text }]`. A leading system message becomes part of `state` too, because
-  Jev has no instruction channel above the question and its docs say domain context belongs in
-  `state`.
-- **Instructions.** The root schema's `description`, if present, goes before every question's
-  `instructions`.
+- **State.** It is the one non-system message the request carries:
+  - **a message whose content is a single `json` part:** that part's `value`, **unchanged**. This is
+    the case the search detector uses (`{ query }`, as the eval sent it), and the value reaches Jev
+    exactly as the caller built it;
+  - **any other text-only message:** its `textOf`, which serialises any `json` parts in place.
+
+  A request with more than one non-system message is refused `unsupported`. Jev answers about one
+  state, and folding a conversation into one would be this adapter inventing a format no caller
+  asked for. A caller with a transcript to judge passes it as a `json` part.
+- **Instructions.** Jev has no instruction channel above the question, and `state` is now the
+  caller's own value, so it cannot also carry instructions. Leading system messages and the root
+  schema's `description` are therefore joined and put before every question's `instructions`.
+  They are repeated once per question, which costs input tokens per question; the detector sends
+  neither.
 - **Ignored controls.** `effort`, `temperature`, `maxOutputTokens` and `cacheAfter` are declared
   `ignored` in the suite's `Wire`. Jev has none of them.
 
@@ -351,11 +439,15 @@ added when a consumer needs it.
 lives here rather than in prose:
 
 - `ModelScript` gains `{ kind: "output"; value: JsonValue; probabilities? }`, an answer to a shape.
-- `SentRequest` gains `output?: JsonValue`, the schema the request carried, translated back.
-- `ModelUnderTest` gains a declaration of what it answers, because today the suite assumes every
-  model writes text and calls tools, and Jev does neither:
-  `answers: { text: boolean; tools: boolean; output: "schema" | "choices" | "none" }`. A case is
-  never given a script the declaration rules out, which is already the rule for `reasoning`.
+- `SentRequest` gains two fields, each translated back from what was actually sent:
+  - `output?: JsonValue`, the schema the request carried;
+  - `values: readonly JsonValue[]`, the structured values the request carried *as structure*. This
+    is empty on every LLM wire, where a `json` part travels in `text` as its serialisation.
+- `ModelUnderTest` gains a declaration of what it answers and how it takes structure. Today the
+  suite assumes every model writes text and calls tools, and Jev does neither:
+  `answers: { text: boolean; tools: boolean; output: "schema" | "choices" | "none" }` and
+  `json: "structure" | "text"`. A case is never given a script the declaration rules out, which is
+  already the rule for `reasoning`.
 - New cases:
   1. *A request for a shape carries that shape to the provider*. `sent().output` deep-equals the
      schema, so a wire that drops it fails.
@@ -366,6 +458,11 @@ lives here rather than in prose:
      `"none"`.
   4. *Probabilities the provider stated reach the caller; a wire that states none does not invent
      them*. This is the pair the `costUsd` cases already make.
+  5. *A `json` part reaches the provider, and is never dropped*. On `json: "text"`,
+     `JSON.stringify(value)` appears in `sent().text` in its place among the other texts. On
+     `json: "structure"`, `sent().values` holds the value deep-equal to what the caller built. The
+     existing case, *a block this wire cannot carry is dropped, not stringified*, keeps applying to
+     `opaque`, and the two cases together pin the difference between the kinds.
 
 ### Accounting
 
@@ -435,9 +532,12 @@ const Route = defineOutput({ schema: z.object({
   ]).describe("A recruiter typed a search query. Which kind of query is it?"),
 }) });
 
-const request = { messages: [{ role: "user" as const, content: query }], output: Route.schema };
-const fromJev = await answered(jev.generate(request));       // native: one `choice` question
-const fromLlm = await answered(deepseek.generate(request));  // the same request, as response_format
+const request: ModelRequest = {
+  messages: [{ role: "user", content: [{ type: "json", value: { query } }] }],  // structured in
+  output: Route.schema,                                                          // structured out
+};
+const fromJev = await answered(jev.generate(request));       // state: { query }, one `choice` question
+const fromLlm = await answered(deepseek.generate(request));  // user text '{"query":"…"}', response_format
 // fromJev.value.probabilities?.operation → { PLAIN: 0.02, FILTER: 0.97, COMPLEX: 0.01 }
 // fromLlm.value.probabilities           → undefined: not reported, so not invented
 ```
@@ -475,7 +575,8 @@ export async function detect(query: string, signal: AbortSignal): Promise<Detect
   const tokens = query.trim().split(/\s+/);
   const Detection = detection(tokens, TYPES);
   const result = await answered(models("JEV").generate({
-    messages: [{ role: "user", content: query }], output: Detection.schema, signal,
+    messages: [{ role: "user", content: [{ type: "json", value: { query } }] }],  // Jev's state, as the eval sent it
+    output: Detection.schema, signal,
   }));
   if (!result.ok) return plain(query);                    // cancelled (stale), rate-limit, …: the plain search already ran
   await spend.record({ purpose: "search-detect", model: result.value.model, usage: result.value.usage });
@@ -504,9 +605,12 @@ export async function detect(query: string, signal: AbortSignal): Promise<Detect
   the host's choice.
 - **Telemetry.** recruitment-os's spans are a projection of log entries, so a sessionless call emits
   nothing unless the detector emits an `$ai_generation` itself from `response.usage` and `.model`.
-- **Before switching.** Re-run the 52-query realistic suite through the adapter. The adapter sends
-  `state` as the query string where `jev.ts` sent `{ query }`, and the effect of that on accuracy has
-  not been measured.
+- **Before switching.** Re-run the 52-query realistic suite through the adapter.
+  - **What matches the eval:** `state` is `{ query }` verbatim and the criteria text is the same.
+    The request should therefore match what `jev.ts` sent field for field, and the re-run confirms
+    that rather than re-measuring.
+  - **What it adds:** the DeepSeek fallback, given the identical request. It has not been scored with
+    the query as `{"query":"…"}` text, so it needs its own row in the results.
 
 ## 6. What changes in the documents
 
@@ -523,37 +627,58 @@ document.
   (Jev) leaves `costUsd` absent like any other, and the host prices it.
 - **`ARCHITECTURE.md`, "The four ports":** the `model` row adds "an answer of a requested shape, or
   a typed refusal".
-- **`ARCHITECTURE.md`, "What an adapter must prove":** a model subject declares what it answers.
-  This is the model suite's equivalent of the sandbox declaring its isolation.
+- **`ARCHITECTURE.md`, "What an adapter must prove":** a model subject declares what it answers,
+  and whether it takes a `json` part as structure or as text. This is the model suite's equivalent
+  of the sandbox declaring its isolation.
+- **`ARCHITECTURE.md`, "Accounting":** the image paragraph gains a sentence. The compaction estimate
+  counts a `json` part by its serialised length, the same text `textOf` produces.
+- **`CODE.md`, "API design":** a sentence beside "Model-visible output stays separate…". A `json`
+  part is model-visible data, and `opaque` is provider state that is never model-visible. Neither is
+  ever stringified as the other.
 - **`PRODUCT.md`:** no change. The inclusion test is met by the conformance suite (every adapter
-  held to `output`) and by a recipe (below).
+  held to `output` and to `json`) and by a recipe (below).
 - **`REFERENCE.md`:** regenerated, adding `defineOutput`, `Output`, `OutputError` and
-  `aglib/model/adapters/typesafe`.
+  `aglib/model/adapters/typesafe`. `ContentPart` is already listed.
 
-**The consumer the gate demands.** `exports-consumed` needs a recipe to import `defineOutput` and
-`createTypesafeModel`. `recipes/coding-agent` already says its job is "our decision on every call the
-agent asks about", and its `decide` today is `() => ({ action: "execute" })`. The proposal makes
-that `decide` classify each requested command with a described-choice `Output`: `read-only`,
-`edits the workspace`, `reaches the network` or `destructive`. It runs on Jev when
-`TYPESAFE_API_KEY` is set and on the recipe's OpenRouter model otherwise. That is the same request on
-two providers, tested hermetically with the fake. It is a demonstration, not a security boundary:
-the sandbox stays the boundary, and the README says so.
+**The consumer the gate demands (decided).** `exports-consumed` needs a recipe to import
+`defineOutput` and `createTypesafeModel`.
+
+- **Where.** `recipes/coding-agent` already says its job is "our decision on every call the agent
+  asks about", and its `decide` today is `() => ({ action: "execute" })`.
+- **What the recipe does.** Its `decide` classifies each requested call with a described-choice
+  `Output`: `read-only`, `edits the workspace`, `reaches the network` or `destructive`. It sends the
+  call as a `json` part (`{ tool, input }`), which also makes it the in-package consumer of
+  structured input.
+- **Which provider.** It runs on Jev when `TYPESAFE_API_KEY` is set and on the recipe's OpenRouter
+  model otherwise. That is the same request on two providers, tested hermetically with the fake.
+- **What it is not.** It is a demonstration, not a security boundary. The sandbox stays the
+  boundary, and the README says so.
 
 ## 7. Migration
 
 - **aglib (0.7.0, a minor: changed contract).**
   - `output` and `probabilities` are optional additions. A caller that sets neither sees no change.
-  - The breaking parts are `ModelError.code` gaining `unsupported`, which breaks exhaustive
-    switches, and the conformance subject requiring an `answers` declaration, which breaks adapters
-    held to the suite outside this package.
+  - The breaking parts:
+    - `ModelError.code` gains `unsupported`, which breaks exhaustive switches.
+    - `ContentPart` gains `json`, which breaks exhaustive switches over `part.type`. A non-exhaustive
+      `if` chain over parts compiles and silently drops the new kind, which is worse. Every adapter
+      held to the suite outside this package now fails case 5 until it handles the kind.
+    - `textOf` now returns `json` parts' serialisation where it used to drop them. That is the
+      intended fix, but a caller that relied on "text parts only" sees more text.
+    - The conformance subject requires the `answers` and `json` declarations.
   - There are no aliases or shims.
 - **Model wrappers.** Any `Model` that wraps another must forward `output` and carry `probabilities`
   through. A wrapper that rebuilds the request field by field silently drops the new field, which is
   the defect this design forbids.
 
   recruitment-os's `paired()` and `completed()` around the Anthropic model are the ones to check.
-- **recruitment-os.** Bump to 0.7.0, handle `unsupported` where it switches on `code`, add the
-  `typesafe` provider and price, and write the detector against the port. The hand-rolled
+- **recruitment-os.**
+  - Bump to 0.7.0.
+  - Handle `unsupported` where it switches on `code`.
+  - Check `messaging/parts.ts` and the transcript and telemetry projections for `part.type`
+    branches.
+  - Add the `typesafe` provider and price.
+  - Write the detector against the port. The hand-rolled
   client lives in the eval directory, not in recruitment-os, so there is no old way to delete
   there. The eval's `jev.ts` can stay as the frozen record of what was measured.
 
@@ -590,23 +715,45 @@ the sandbox stays the boundary, and the README says so.
 11. **Silently ignoring `output` on a wire that cannot honour it.** That would be the
     caller-control-going-nowhere defect the conformance `Wire` declaration exists to catch, and here
     it is worse: the caller would parse prose.
+12. **The answer as a `json` part instead of text.** "Structured in, structured out" suggests it,
+    and it was weighed. The trouble is what the adapter would have to do:
+    - **An adapter would have to parse.** An LLM wire receives text, so every LLM adapter would
+      `JSON.parse` the answer. An answer that does not parse (truncated, refused, a provider that
+      treated `strict` as a hint) would then need a second representation for the same field, text
+      when it failed and `json` when it worked.
+    - **The log would hold something nobody said.** The assistant's turn would no longer be what the
+      model said, and the next turn would read back a re-serialisation.
+    - **Validation already has an owner.** The text is what was said, and `defineOutput.parse` turns
+      it into a typed value in one place. That place also owns validation, which an adapter cannot
+      do because it does not hold the caller's zod schema.
+13. **Jev's `state` taken from a request-level field (`ModelRequest.state`).** That would be a
+    second way to give a model input, beside `messages`. LLM wires would have to merge it into the
+    conversation somewhere, and a request built for Jev would no longer run unchanged on an LLM. A
+    content part is input that every wire already carries.
+14. **Flattening a structured input to text in the caller.** This was this proposal's own first
+    draft. It loses the structure Jev takes natively: the eval measured `state: { query }`, and the
+    adapter would have sent a string. It also leaves each caller to pick its own serialisation for
+    the same object.
+15. **Reusing `opaque` for structured input.** `opaque` is a provider's own block. It is never
+    model-visible and is valid only on the wire that produced it, which is the opposite of caller
+    data every wire must show.
 
-## 9. Open decisions for Adam
+## 9. Decisions
 
-1. **Where the Jev adapter lives.** The recommendation is in-package, consumed by the coding-agent
-   `decide` recipe. The alternative is that the adapter lives in recruitment-os and runs
-   `aglib/model/conformance`. That needs no recipe change, but then aglib doesn't take Jev.
-2. **`probabilities` on `ModelResponse`.** The recommendation is to keep it. The detector should
-   drop low-confidence structure, and the number cannot be reconstructed later. The alternative is
-   to leave it out until a measured threshold exists.
-3. **How Jev's `state` is mapped.** The proposal sends the conversation's text. The alternative is
-   to let a caller pass a JSON object as `state` (the eval sent `{ query }`). That would need a JSON
-   content part, which is a bigger change. Decide after re-running the realistic suite through the
-   adapter.
-4. **`defineOutput` versus a one-call helper.** The proposal is the inert declaration plus the host's
-   own drain, matching `defineTool` and the reason `collect` stayed internal. The alternative is
-   `runModel({ model, request, output }) → Result<{ value, response }>`, which is one more value
-   export.
+### Taken (Adam, 2026-10-05)
+
+1. **The Jev adapter lives in aglib**, as `aglib/model/adapters/typesafe`. Its gate consumer is the
+   coding-agent recipe's `decide` (§6).
+2. **`probabilities` stays on `ModelResponse`**, as a reported observation, never derived.
+3. **Structured input is a `json` content part.** The Typesafe adapter passes it as `state`
+   unchanged, and LLM wires serialise it as text (§3), so the same request works on every provider.
+
+4. **The typed result is `defineOutput`**, an inert declaration beside `defineTool`. The caller
+   drains the generation itself, and `collect` stays internal. `defineTool` is unchanged, and the
+   two share one internal zod-to-JSON-Schema-and-check helper, `src/schema.ts` (§3).
+
+### Still open
+
 5. **The OpenAI Decisions API.** Add an adapter when its contract is published, or rely on
    `gpt-6-luna` with structured output (mode (c) over the Responses wire) until then.
 
