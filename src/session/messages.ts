@@ -72,10 +72,11 @@ export function toMessages(input: {
   // rejects an assistant turn holding a call with no result, so leaving the gap
   // would make the session permanently unusable. What is said is what is known
   // — the call did not report back — and never an invented result.
-  const answered = new Set(
+  const answered = new Map(
     input.entries.filter((entry) => entry.type === "tool.finished")
-      .map((entry) => `${entry.runId}\u0000${entry.callId}`),
+      .map((entry) => [`${entry.runId}\u0000${entry.callId}`, entry] as const),
   );
+  const placed = new Set<Stored>();
   const closed = new Set(
     input.entries.filter((entry) => entry.type === "run.finished").map((entry) => entry.runId),
   );
@@ -101,6 +102,18 @@ export function toMessages(input: {
           ...(entry.calls?.length ? { calls: entry.calls.map(parseable) } : {}),
           ...(entry.providerState ? { providerState: entry.providerState } : {}),
         });
+        // Older logs may have input between synchronous results. Group them
+        // beside their calls without rewriting the log or moving async results
+        // ahead of work that genuinely ran while those calls were pending.
+        const results = (entry.calls ?? []).filter((call) => !call.async)
+          .flatMap((call) => {
+            const result = answered.get(`${entry.runId}\u0000${call.callId}`);
+            return result && result.seq > cut ? [result] : [];
+          }).sort((a, b) => a.seq - b.seq);
+        for (const result of results) {
+          messages.push(toolMessage(result));
+          placed.add(result);
+        }
         for (const call of entry.calls ?? []) {
           if (answered.has(`${entry.runId}\u0000${call.callId}`) || !closed.has(entry.runId)) continue;
           messages.push({
@@ -111,16 +124,7 @@ export function toMessages(input: {
         break;
       }
       case "tool.finished":
-        messages.push({
-          role: "tool",
-          callId: entry.callId,
-          content: entry.result.uncertain
-            ? typeof entry.result.content === "string"
-              ? `Effect unknown. Reconcile the original action before retrying, including under a new call ID.\n${entry.result.content}`
-              : [{ type: "text", text: "Effect unknown. Reconcile the original action before retrying, including under a new call ID." }, ...entry.result.content]
-            : entry.result.content,
-          ...(entry.result.isError ? { isError: true } : {}),
-        });
+        if (!placed.has(entry)) messages.push(toolMessage(entry));
         break;
       // Not model-visible: tool.started and run.context are bookkeeping, and
       // run.finished is a boundary.
@@ -135,6 +139,19 @@ export function toMessages(input: {
   // this request only and must not be written into the cached prefix.
   if (input.context?.turn) messages.push({ role: "system", content: input.context.turn });
   return messages;
+}
+
+function toolMessage(entry: Extract<Stored, { type: "tool.finished" }>): Message {
+  return {
+    role: "tool",
+    callId: entry.callId,
+    content: entry.result.uncertain
+      ? typeof entry.result.content === "string"
+        ? `Effect unknown. Reconcile the original action before retrying, including under a new call ID.\n${entry.result.content}`
+        : [{ type: "text", text: "Effect unknown. Reconcile the original action before retrying, including under a new call ID." }, ...entry.result.content]
+      : entry.result.content,
+    ...(entry.result.isError ? { isError: true } : {}),
+  };
 }
 
 /**

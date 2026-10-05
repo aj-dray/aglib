@@ -43,6 +43,44 @@ test("run.context is the application's prefix snapshot and is not model-visible"
   expect(JSON.stringify(messages)).not.toContain("bash");
 });
 
+test.each([false, true])("a split log projects synchronous results beside their calls (closed: %s)", (closed) => {
+  const entries = log(
+    { type: "run.started", runId: "r", input: "go" },
+    { type: "assistant", runId: "r", content: "", calls: [
+      { callId: "c1", name: "t", arguments: "{}" },
+      { callId: "c2", name: "t", arguments: "{}" },
+    ] },
+    { type: "tool.finished", runId: "r", callId: "c2", result: { content: "second" } },
+    { type: "run.started", runId: "r", input: "correction", from: { kind: "session", id: "peer" } },
+    { type: "tool.finished", runId: "r", callId: "c1", result: { content: "first", isError: true, uncertain: true } },
+    ...(closed ? [{ type: "run.finished" as const, runId: "r", outcome: "cancelled" as const }] : []),
+    { type: "run.started", runId: "next", input: "continue" },
+    { type: "assistant", runId: "next", content: "", calls: [{ callId: "c1", name: "t", arguments: "{}" }] },
+    { type: "tool.finished", runId: "next", callId: "c1", result: { content: "new result" } },
+  );
+  const before = JSON.stringify(entries);
+  const messages = toMessages({ instructions: "i", entries, attribution: true });
+  expect(messages.map((message) => message.role === "tool" ? `tool ${message.callId}` : message.role))
+    .toEqual(["system", "user", "assistant", "tool c2", "tool c1", "user", "user", "assistant", "tool c1"]);
+  expect(messages[3]?.content).toBe("second");
+  expect(messages[4]).toMatchObject({ isError: true });
+  expect(String(messages[4]?.content)).toContain("Effect unknown");
+  expect(messages[5]?.content).toBe("[from session peer]\ncorrection");
+  expect(messages.at(-1)?.content).toBe("new result");
+  expect(JSON.stringify(entries)).toBe(before);
+});
+
+test("a completed asynchronous result stays after the work done while it was running", () => {
+  const entries = log(
+    { type: "assistant", runId: "r", content: "", calls: [{ callId: "c1", name: "t", arguments: "{}", async: true }] },
+    { type: "run.started", runId: "r", input: "correction" },
+    { type: "assistant", runId: "r", content: "working independently" },
+    { type: "tool.finished", runId: "r", callId: "c1", result: { content: "done" } },
+  );
+  expect(toMessages({ instructions: "i", entries }).map((message) => message.content))
+    .toEqual(["i", "", "correction", "working independently", "done"]);
+});
+
 test("projects provider continuation state beside the assistant turn", () => {
   const providerState = { provider: "acme-wire", items: [{ signature: "sig-1" }] } as const;
   const messages = toMessages({

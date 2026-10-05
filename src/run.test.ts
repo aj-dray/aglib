@@ -684,6 +684,12 @@ test.each([false, true])("a turn delivery waits for contiguous batch results (re
     message.role === "tool" ? `tool ${message.callId}` : message.role);
   expect(tail).toEqual(["assistant", "tool c1", "tool c2", "user"]);
   expect(textOf(requests[1]!.messages.at(-1)!.content)).toBe("Correction: Friday");
+  // Projection repairs old split logs; the writer must also prevent new ones.
+  const saved = await store.read({ sessionId: "s" });
+  if (!saved.ok) throw new Error("read failed");
+  expect(saved.value.entries.filter((entry) => entry.type === "run.started" || entry.type === "tool.finished")
+    .map((entry) => entry.type === "tool.finished" ? `tool ${entry.callId}` : "user"))
+    .toEqual(["user", "tool c1", "tool c2", "user"]);
 });
 
 test("an application interrupt during a batch preserves its results before the next input", async () => {
