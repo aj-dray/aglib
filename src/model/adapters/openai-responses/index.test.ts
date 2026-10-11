@@ -10,8 +10,8 @@ import {
 
 class FakeConnection implements OpenAiResponsesConnection {
   readonly sent: ResponsesClientEvent[] = [];
-  readonly #values: Array<{ type: "message"; message: ResponsesServerEvent } | { type: "close" }> = [];
-  readonly #waiters: Array<(step: IteratorResult<{ type: "message"; message: ResponsesServerEvent } | { type: "close" }>) => void> = [];
+  readonly #values: Array<{ type: "message"; message: ResponsesServerEvent } | { type: "close" } | { type: "error"; error: Error }> = [];
+  readonly #waiters: Array<(step: IteratorResult<{ type: "message"; message: ResponsesServerEvent } | { type: "close" } | { type: "error"; error: Error }>) => void> = [];
   #ended = false;
   closes = 0;
   onSend?: (event: ResponsesClientEvent) => void;
@@ -26,6 +26,11 @@ class FakeConnection implements OpenAiResponsesConnection {
     this.#push({ type: "message", message: event as unknown as ResponsesServerEvent });
   }
 
+  /** The socket itself failing, as the SDK reports it. */
+  fail(error: Error): void {
+    this.#push({ type: "error", error });
+  }
+
   close(): void {
     this.closes += 1;
     this.#push({ type: "close" });
@@ -33,14 +38,14 @@ class FakeConnection implements OpenAiResponsesConnection {
     for (const waiter of this.#waiters.splice(0)) waiter({ done: true, value: undefined });
   }
 
-  #push(value: { type: "message"; message: ResponsesServerEvent } | { type: "close" }): void {
+  #push(value: { type: "message"; message: ResponsesServerEvent } | { type: "close" } | { type: "error"; error: Error }): void {
     if (this.#ended) return;
     const waiter = this.#waiters.shift();
     if (waiter) waiter({ done: false, value });
     else this.#values.push(value);
   }
 
-  next(): Promise<IteratorResult<{ type: "message"; message: ResponsesServerEvent } | { type: "close" }>> {
+  next(): Promise<IteratorResult<{ type: "message"; message: ResponsesServerEvent } | { type: "close" } | { type: "error"; error: Error }>> {
     const value = this.#values.shift();
     if (value) return Promise.resolve({ done: false, value });
     if (this.#ended) return Promise.resolve({ done: true, value: undefined });
@@ -524,6 +529,17 @@ test("an error event naming one response fails only that generation, with the pr
     model.close();
     server.stop();
   }
+});
+
+test("a connection the hub stops reading is closed, so nothing on it goes unheard", async () => {
+  const wire = new FakeConnection();
+  const model = createOpenAiResponsesModel({ apiKey: "k", model: "gpt-6-astra", connect: () => wire });
+  wire.onSend = (event) => { if (event.type === "response.create") wire.fail(new Error("socket broke")); };
+  const outcome = await drain(model.generate({ messages: [{ role: "user", content: "hi" }] }));
+  expect(outcome.result.ok || outcome.result.error.code).toBe("provider");
+  expect(wire.closes).toBe(1);
+  model.close();
+  expect(wire.closes).toBe(1);
 });
 
 test("the socket failing fails every generation sharing it", async () => {

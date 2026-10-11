@@ -116,9 +116,7 @@ class ResponsesHub {
   }
 
   close(): void {
-    if (this.#ended) return;
     this.#finish({ type: "close", reason: "Responses model closed" });
-    this.#connection.close();
   }
 
   async #read(): Promise<void> {
@@ -184,6 +182,9 @@ class ResponsesHub {
     for (const lane of this.#lanes.values()) lane.queue.end();
     this.#lanes.clear();
     this.#onEnd();
+    // A hub that has stopped reading must not leave its socket open: nothing would hear what it
+    // says next, and the SDK raises an error nobody listens for as an unhandled rejection.
+    this.#connection.close();
   }
 }
 
