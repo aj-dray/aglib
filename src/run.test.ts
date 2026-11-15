@@ -764,7 +764,7 @@ test("a run that keeps calling tools folds without waiting to end", async () => 
     })),
     { text: "The balance is 1250." },
   ]);
-  const summariser = createFakeModel(Array.from({ length: 10 }, () => ({ text: "It read the ledger repeatedly." })));
+  const summariser = createFakeModel(Array.from({ length: 10 }, () => ({ text: "## Checkpoint\nIt read the ledger repeatedly." })));
 
   const result = await runAgent({
     agent: agentWith(model, {
@@ -1125,19 +1125,21 @@ test("a cancelled generation is waited for, not spun on", async () => {
 });
 
 
-test("compaction is paid once even when its checkpoint is rejected", async () => {
-  for (const text of ["The user asked to audit the ledger.", ""]) {
+test("compaction is paid for every attempt, including a rejected checkpoint", async () => {
+  // A reply that is not a checkpoint is asked for once more; both attempts were paid for.
+  for (const text of ["## Checkpoint\nThe user asked to audit the ledger.", ""]) {
+    const attempts = text ? 1 : 2;
     const store = createSqliteStore({ database: new Database(":memory:") });
     const model = createFakeModel([{ text: "done", usage: { costUsd: 0.5 } }]);
-    const summary = createFakeModel([{ text, usage: { costUsd: 0.25, inputTokens: 4000 } }]);
+    const summary = createFakeModel(Array.from({ length: attempts }, () => ({ text, usage: { costUsd: 0.25, inputTokens: 4000 } })));
     const run = runAgent({ agent: agentWith(model, { hooks: [createCompactionHook({ model: summary, maxInputTokens: 1000 })] }),
       store, sessionId: "s", input: "Audit the ledger. ".repeat(1000) });
     const result = await run.result;
     expect(result.status).toBe(text ? "completed" : "failed");
-    expect(result.usage.costUsd).toBe(text ? 0.75 : 0.25);
+    expect(result.usage.costUsd).toBe(text ? 0.75 : 0.5);
     const saved = await store.read({ sessionId: "s" });
     if (!saved.ok) throw new Error("read failed");
-    expect(saved.value.entries.filter(entry => entry.type === "model.finished")).toHaveLength(1);
+    expect(saved.value.entries.filter(entry => entry.type === "model.finished")).toHaveLength(attempts);
     expect(saved.value.entries.filter(entry => entry.type === "assistant")).toHaveLength(text ? 1 : 0);
     await store.close();
   }
