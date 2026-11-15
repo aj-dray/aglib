@@ -254,8 +254,10 @@ It is policy as well as arithmetic. The two applications that wanted a spend lim
 The compaction fallback estimates text by length and reserves 8,192 tokens per image; it never
 counts encoded image bytes as text. Image cost varies by provider and dimensions, so this is a
 heuristic, not a context guarantee. Observed provider input usage remains the stronger floor.
-Compaction retains the newest tool batch when it contains images not yet seen by the agent; if
-the retained context cannot fit, the run reports overflow instead of silently discarding them.
+Compaction retains media the agent has not yet seen — images or files in the newest tool batch,
+with the turn that asked for them, or in input that arrived after its last turn — since a text
+checkpoint cannot describe them; if the retained context cannot fit, the run reports overflow
+instead of silently discarding them.
 
 Tool-result images reach the provider alongside their associated result text. Anthropic carries
 these blocks inside `tool_result.content`. Chat Completions only accepts text in a tool message,

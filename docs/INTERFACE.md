@@ -62,6 +62,18 @@ Nothing is deleted: the latest summary replaces an older prefix in model context
 input window of the model that answers with room for the turn after the fold. The summary is written
 by the hook's explicit `model`. Its short checkpoint preserves instructions, evidence, completed effects and unresolved work, including tool arguments and outcomes. Empty, truncated or non-shrinking output never replaces history. A fold that cannot bring the request under budget fails explicitly. Provider input usage anchors the estimate until a compaction changes the context; new messages and tool schemas are estimated without requiring a tokenizer for each provider.
 
+The fold is posed as a document to summarize, not a conversation to join. The instructions are a
+system message; the folded messages follow as a delimited `<transcript>` of plain statements — what
+the user and agent said, which tool was called with which arguments, what it returned or how it
+failed — and the request is restated after it, so the last thing the model reads is what to write.
+Posed as raw role-and-calls lines ending in the agent's own narration and shell call, a weaker model
+(Muse Spark, in four of fourteen production folds) wrote the next step of the task instead, and that
+was committed as the summary. A checkpoint must therefore begin with the line `## Checkpoint`. A
+reply without it, or with a tool call, is asked for once more with the same request; a second such
+reply fails the fold with code `failed` and the history unchanged. Every attempt's usage is
+recorded. `prompt` replaces what the checkpoint must preserve, which is domain-specific; the posing
+and the marker stay the hook's.
+
 ## What a run consumed
 
 A run answers with `usage` on every outcome, because a run that burned a thousand tokens and then failed burned them. It is summed from the `assistant` and `model.finished` entries the activation committed, so a harness reports no total of its own and a cancelled run still says what it cost.
