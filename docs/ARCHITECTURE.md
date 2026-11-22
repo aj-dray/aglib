@@ -110,14 +110,19 @@ That renewal is not decoration. Without it the mark stayed at the instant the ru
 outstanding longer than the claim window was handed to a second worker while the first was still
 going — and a compare-and-swap can refuse the losing write, but it cannot un-run a tool call that
 already had its effect. A worker that dies still releases its session, because a dead worker stops
-writing. What remains is one narrow case: an activation that commits nothing at all for longer than
-the window can still be taken, including while a long asynchronous tool is the only work pending.
-Set `claimMs` above the longest silent turn or tool duration the deployment permits.
+writing.
 
-The claim is still deliberately minimal: nothing renews it but the work itself — no heartbeat, no
-renewal subsystem, no fencing token. It expires on its own so a worker that dies does not strand a
-session, and if that worker is somehow still alive its writes fail the compare-and-swap anyway.
-**The claim saves work; the compare-and-swap makes the work safe.**
+Writing is not enough on its own, because an activation can be quiet and alive: a model thinking for
+minutes, a tool that runs for longer than the window. So a claimed run also **renews** its claim on a
+timer (`renewAfterMs`, a third of the window) without touching the log, and the claim carries a
+**fencing id**, `claimId`, that every claimed write names. A position cannot tell an owner from its
+successor — a worker whose claim lapsed and passed on can still be at the right sequence if nothing
+committed in between — and the id can. A run that finds its claim gone stops, and before each tool
+is admitted it checks that it still owns the session, again after the policy has decided, since a
+policy may itself wait. That cannot take back an effect already admitted; it stops the next one.
+
+Closing an interrupted predecessor and opening its successor is one commit. Two writes released the
+claim between them, and another worker could take the session in the gap.
 
 A third change belongs to the projection rather than the store: an assistant turn holding a call
 with no result is closed with an explicit statement that the call did not report back. Some
@@ -281,7 +286,8 @@ do different jobs, one does not imply the other, and getting it subtly wrong pro
 provider will not accept rather than a rejected write. Prose said so, in this document, and prose
 does not fail — a Postgres store written outside this package from the interface alone renewed its
 claim when a run started instead of on every write it made, exactly the defect described above, and
-shipped that way until the suite was pointed at it. The sandbox suite found three more in a hosted provider: paths were not confined
+shipped that way until the suite was pointed at it. The suite now also holds a store to renewal
+without moving the cursor, and to refusing a stale owner's write at the right sequence. The sandbox suite found three more in a hosted provider: paths were not confined
 to the root, closing twice reported a refusal to release, and one combined output stream was
 reported as two.
 

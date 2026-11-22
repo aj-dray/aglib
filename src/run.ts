@@ -53,9 +53,31 @@ export function runAgent(options: RunAgentOptions): AgentRun {
     let result: RunResult | undefined;
     let unwatch: (() => void) | undefined;
     let clearInputWait: (() => void) | undefined;
+    let renewal: ReturnType<typeof setInterval> | undefined;
+    let lost: Failure | undefined;
 
     try {
       const { agent, store } = options;
+      // A claimed run keeps its claim while its model or a tool is quiet, and
+      // stops the moment the claim is gone: whoever holds it now owns the
+      // session, and nothing this run does next would be its to do.
+      const renew = async (): Promise<Failure | undefined> => {
+        if (!claim || !store || lost) return lost;
+        const renewed = await store.renew({ sessionId, claimId: claim.claimId });
+        if (!renewed.ok) { lost = renewed.error; controller.abort(); }
+        return lost;
+      };
+      if (claim && store) {
+        if (await renew()) return { status: "failed", error: lost!, seq: claim.seq, usage };
+        let renewing = false;
+        renewal = setInterval(() => {
+          if (renewing) return;
+          renewing = true;
+          void renew()
+            .catch((error: unknown) => { lost = { code: "unavailable", message: String(error), retryable: false }; controller.abort(); })
+            .finally(() => { renewing = false; });
+        }, claim.renewAfterMs);
+      }
       const restored = store ? await open(store, sessionId, agent, options.key) : undefined;
       if (restored && !restored.ok) {
         return {
@@ -148,6 +170,7 @@ export function runAgent(options: RunAgentOptions): AgentRun {
         if (store) {
           const written = await store.append({
             sessionId, expectedSeq: log.seq, entries,
+            ...(claim ? { claimId: claim.claimId } : {}),
             ...(deliveries.length ? { enqueue: deliveries } : {}),
             ...(take ? { takePending: take } : {}),
           });
@@ -240,7 +263,16 @@ export function runAgent(options: RunAgentOptions): AgentRun {
       const executor = agent.tools?.length
         ? createExecutor({
             tools: agent.tools,
-            ...(agent.decide ? { decide: agent.decide } : {}),
+            // A tool's effect is the thing a lost claim cannot take back, so a
+            // claimed run checks it still owns the session before admitting one
+            // — and again after the policy, which may itself have waited.
+            ...(claim ? { decide: async (call: Parameters<NonNullable<typeof agent.decide>>[0]) => {
+              const before = await renew();
+              if (before) return { action: "reject" as const, message: before.message };
+              const decision = agent.decide ? await agent.decide(call) : { action: "execute" as const };
+              const after = await renew();
+              return after ? { action: "reject" as const, message: after.message } : decision;
+            } } : agent.decide ? { decide: agent.decide } : {}),
             sessionId, runId,
             report: (callId, data) => updates.push({ type: "tool.progress", callId, data }),
           })
@@ -277,25 +309,30 @@ export function runAgent(options: RunAgentOptions): AgentRun {
       // it, so one session never holds two open runs. Only on a claim: the
       // store established there that nothing else is running, where a bare
       // `sessionId` establishes nothing and the run may still be live.
-      if (arrivals.length && interrupted && claim) {
-        await commit([{
+      //
+      // Nothing opens a resumption. A `run.started` recording input nobody sent
+      // would be a second beginning for one conversation; the loop reads the
+      // history it was handed instead, sees the call that already ran, and
+      // carries on rather than asking for it again.
+      //
+      // One commit for both: closing the predecessor in a write of its own
+      // released the claim between the two, and another worker could take the
+      // session in that gap.
+      const opening: Entry[] = arrivals.map((arrival): Entry => ({
+        type: "run.started", runId, input: arrival.input,
+        ...(arrival.from ? { from: arrival.from } : {}),
+      }));
+      if (opening.length && interrupted && claim) {
+        opening.unshift({
           type: "run.finished", runId: interrupted, outcome: "cancelled",
           error: {
             code: "superseded",
             message: "This activation was interrupted, and a later one began over it.",
             retryable: false,
           },
-        }]);
+        });
       }
-
-      // Nothing opens a resumption. A `run.started` recording input nobody sent
-      // would be a second beginning for one conversation; the loop reads the
-      // history it was handed instead, sees the call that already ran, and
-      // carries on rather than asking for it again.
-      await commit(arrivals.map((arrival): Entry => ({
-        type: "run.started", runId, input: arrival.input,
-        ...(arrival.from ? { from: arrival.from } : {}),
-      })));
+      await commit(opening);
 
       // Every ceiling is checked where work is recorded, and a resumption
       // records nothing before its first turn — so a deadline that had already
@@ -372,6 +409,7 @@ export function runAgent(options: RunAgentOptions): AgentRun {
       const settled = stopped && outcome.status === "cancelled"
         ? { status: "failed" as const, error: stopped }
         : outcome;
+      if (renewal) clearInterval(renewal);
 
       await commit(
         [{
@@ -404,6 +442,7 @@ export function runAgent(options: RunAgentOptions): AgentRun {
           }
         }
       }
+      if (renewal) clearInterval(renewal);
       unwatch?.();
       clearInputWait?.();
       updates.close();

@@ -11,6 +11,18 @@ import { textOf } from "./content.js";
 import { err, ok } from "./result.js";
 import type { Agent } from "./agent.js";
 import type { Message, Model, ModelRequest } from "./model/model.js";
+import type { Runnable, Store } from "./store/store.js";
+
+/**
+ * A claim made by hand, for a case about what `runAgent` does with one rather
+ * than how a store hands it out. The store accepts it as its owner; fencing a
+ * claim is the store's to prove, and the conformance suite proves it.
+ */
+const handed = (store: Store, claim: Omit<Runnable, "claimId" | "renewAfterMs">): { store: Store; claim: Runnable } => ({
+  store: { ...store, renew: async () => ok(undefined), append: ({ claimId: _claim, ...input }) => store.append(input) },
+  claim: { ...claim, claimId: "handed", renewAfterMs: 60_000 },
+});
+
 
 const ledger = defineTool({
   name: "read_ledger", description: "read", concurrent: true,
@@ -880,7 +892,7 @@ test("an activation with no input continues the interrupted run, under its own i
 
   const result = await runAgent({
     agent: agentWith(watching, { tools: [effect] }),
-    store, claim: { sessionId: "s", seq: 4, pending: [], metadata: {} },
+    ...handed(store, { sessionId: "s", seq: 4, pending: [], metadata: {} }),
   }).result;
   expect(result.status).toBe("completed");
 
@@ -913,7 +925,7 @@ test("a claim with nothing open has nothing to continue", async () => {
   });
   const result = await runAgent({
     agent: agentWith(createFakeModel([])),
-    store, claim: { sessionId: "s", seq: 2, pending: [], metadata: {} },
+    ...handed(store, { sessionId: "s", seq: 2, pending: [], metadata: {} }),
   }).result;
   expect(result.status).toBe("failed");
   if (result.status !== "failed") return;
@@ -993,7 +1005,7 @@ test("there is nothing to continue in a session that has said nothing", async ()
   await store.create({ sessionId: "s", agent: { id: "a", version: "1" } });
   const result = await runAgent({
     agent: agentWith(createFakeModel([])),
-    store, claim: { sessionId: "s", seq: 0, pending: [], metadata: {} },
+    ...handed(store, { sessionId: "s", seq: 0, pending: [], metadata: {} }),
   }).result;
   expect(result.status).toBe("failed");
   if (result.status !== "failed") return;
@@ -1159,8 +1171,7 @@ test("recovery records uncertainty without re-executing an unreported effect", a
   const fake = createFakeModel([{ text: "The original effect needs reconciliation." }]);
   const model: Model = { id: fake.id, generate(request) { seen = JSON.stringify(request.messages); return fake.generate(request); } };
   const tool = defineTool({ name: call.name, description: "", schema: z.object({}), execute: () => { effects++; return { content: "sent" }; } });
-  const result = await runAgent({ agent: agentWith(model, { tools: [tool] }), store,
-    claim: { sessionId: "s", seq: 3, pending: [], metadata: {} } }).result;
+  const result = await runAgent({ agent: agentWith(model, { tools: [tool] }), ...handed(store, { sessionId: "s", seq: 3, pending: [], metadata: {} }) }).result;
   expect(result.status).toBe("completed");
   expect(effects).toBe(0);
   expect(seen).toContain("new call ID");
@@ -1168,4 +1179,47 @@ test("recovery records uncertainty without re-executing an unreported effect", a
   if (!saved.ok) throw new Error("read failed");
   expect(saved.value.entries.find(entry => entry.type === "tool.finished")).toMatchObject({ result: { uncertain: true, isError: true } });
   await store.close();
+});
+
+test("a claimed run keeps its claim through a tool quieter than the window, and no second worker takes it", async () => {
+  const store = createSqliteStore({ database: new Database(":memory:"), claimMs: 300 });
+  await store.create({ sessionId: "s", agent: { id: "a", version: "1" } });
+  await store.append({ sessionId: "s", expectedSeq: 0, entries: [], enqueue: [{ sessionId: "s", input: "balance?" }] });
+  const claimed = await store.next({});
+  if (!claimed.ok || !claimed.value) throw new Error("no claim");
+  let stolen: unknown;
+  const slow = defineTool({
+    name: "read_ledger", description: "read", schema: z.object({}),
+    execute: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      const second = await store.interrupted({});
+      stolen = second.ok ? second.value : second.error;
+      return { content: "1250" };
+    },
+  });
+  const result = await runAgent({
+    agent: agentWith(createFakeModel([{ calls: [call] }, { text: "1250." }]), { tools: [slow] }),
+    store, claim: claimed.value,
+  }).result;
+  expect(result.status).toBe("completed");
+  expect(stolen).toBeUndefined();
+});
+
+test("a run that lost its claim admits no further tool effect", async () => {
+  const store = createSqliteStore({ database: new Database(":memory:") });
+  let effects = 0;
+  const effect = defineTool({ name: "read_ledger", description: "read", schema: z.object({}), execute: () => { effects += 1; return { content: "1250" }; } });
+  await store.create({ sessionId: "s", agent: { id: "a", version: "1" } });
+  await store.append({ sessionId: "s", expectedSeq: 0, entries: [], enqueue: [{ sessionId: "s", input: "balance?" }] });
+  const claimed = await store.next({});
+  if (!claimed.ok || !claimed.value) throw new Error("no claim");
+  let renewals = 0;
+  // The first renewal is the run checking it starts as the owner; the claim is gone after that.
+  const losing: Store = { ...store, renew: async (input) => (renewals += 1) === 1 ? store.renew(input) : err({ code: "conflict", message: "Session ownership expired or changed", retryable: false }) };
+  const result = await runAgent({
+    agent: agentWith(createFakeModel([{ calls: [call] }, { text: "1250." }]), { tools: [effect] }),
+    store: losing, claim: claimed.value,
+  }).result;
+  expect(effects).toBe(0);
+  expect(result.status).not.toBe("completed");
 });

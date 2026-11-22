@@ -4,9 +4,21 @@ import { runAgent } from "./run.js";
 import { createNativeHarness } from "./harness/adapters/native/loop.js";
 import { createFakeModel } from "./model/adapters/fake/index.js";
 import { createSqliteStore } from "./store/adapters/sqlite.js";
-import { err } from "./result.js";
+import { err, ok } from "./result.js";
 import type { Agent } from "./agent.js";
 import type { Model, ModelRequest } from "./model/model.js";
+import type { Runnable, Store } from "./store/store.js";
+
+/**
+ * A claim made by hand, for a case about what `runAgent` does with one rather
+ * than how a store hands it out. The store accepts it as its owner; fencing a
+ * claim is the store's to prove, and the conformance suite proves it.
+ */
+const handed = (store: Store, claim: Omit<Runnable, "claimId" | "renewAfterMs">): { store: Store; claim: Runnable } => ({
+  store: { ...store, renew: async () => ok(undefined), append: ({ claimId: _claim, ...input }) => store.append(input) },
+  claim: { ...claim, claimId: "handed", renewAfterMs: 60_000 },
+});
+
 
 const agent = (model: Model, hooks: Agent["hooks"]): Agent => ({
   id: "hooks", version: "1", instructions: "Work", harness: createNativeHarness({ model }), hooks,
@@ -42,7 +54,7 @@ test("resuming after the reminder committed does not grant another reminder", as
     { type: "assistant", runId: "r", content: "private" },
     { type: "hook.input", runId: "r", hook: "reminder", input: "Consider sending." },
   ] });
-  const result = await runAgent({ store, claim: { sessionId: "s", seq: 3, pending: [], agent: { id: "hooks", version: "1" } }, agent: agent(
+  const result = await runAgent({ ...handed(store, { sessionId: "s", seq: 3, pending: [], agent: { id: "hooks", version: "1" } }), agent: agent(
     createFakeModel([{ text: "done" }]), [{ name: "reminder", beforeStop: () => ({ input: "Again?" }) }],
   ) }).result;
   expect(result.status).toBe("completed");

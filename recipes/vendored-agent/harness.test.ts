@@ -124,7 +124,7 @@ liveTest("pi is put back where a killed worker left it, from our log alone", asy
   });
 
   const database = new Database(":memory:");
-  const store = createSqliteStore({ database });
+  const store = createSqliteStore({ database, claimMs: 60 });
   const agent = {
     id: "t", version: "1",
     instructions: "Answer from the ledger. Be brief.",
@@ -145,9 +145,11 @@ liveTest("pi is put back where a killed worker left it, from our log alone", asy
     ],
   });
 
-  const result = await runAgent({
-    agent, store, claim: { sessionId: "s", seq: 4, pending: [], metadata: {} },
-  }).result;
+  // Claimed the way a second worker would find it: after the first one's claim lapsed.
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  const claimed = await store.interrupted({});
+  if (!claimed.ok || !claimed.value) throw new Error("the interrupted session was not handed out");
+  const result = await runAgent({ agent, store, claim: claimed.value }).result;
 
   await opened.value.close();
 
