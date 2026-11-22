@@ -107,6 +107,9 @@ async function runTurn(options: ClaudeAgentSdkHarnessOptions, context: HarnessCo
 
   const query = options.query ?? sdkQuery;
   let usage: Usage | undefined;
+  // What the process said on its way out: an exit code alone names no reason.
+  let stderr = "";
+  const said = (message: string) => stderr.trim() ? `${message}: ${stderr.trim().slice(-1_000)}` : message;
   try {
     const messages = query({
       prompt: inputs,
@@ -124,6 +127,7 @@ async function runTurn(options: ClaudeAgentSdkHarnessOptions, context: HarnessCo
         cwd: options.cwd,
         env: { ...options.env },
         abortController: abort,
+        stderr: (data: string) => { stderr = `${stderr}${data}`.slice(-2_000); },
         ...(options.executable ? { pathToClaudeCodeExecutable: options.executable } : {}),
         ...(start.resume ? { resume: start.resume } : {}),
       },
@@ -145,9 +149,10 @@ async function runTurn(options: ClaudeAgentSdkHarnessOptions, context: HarnessCo
       if (message.type !== "result") continue;
       usage = addUsage(usage, decodeUsage(message.usage));
       for (const uuid of [message.user_message_uuid, ...(message.user_message_uuids ?? [])]) if (uuid) outstanding.delete(uuid);
-      if (message.subtype !== "success") {
+      // A refused request — a bad token, a spent plan — is a "success" that says it is an error.
+      if (message.subtype !== "success" || message.is_error) {
         inputs.close();
-        const said = message.errors.join("; ") || message.subtype;
+        const said = message.subtype === "success" ? message.result || "Claude Code reported an error." : message.errors.join("; ") || message.subtype;
         if (start.resume && /no conversation found/i.test(said)) {
           return { status: "failed", error: { code: "session-missing", message: said, retryable: true } };
         }
@@ -160,7 +165,7 @@ async function runTurn(options: ClaudeAgentSdkHarnessOptions, context: HarnessCo
   } catch (error) {
     inputs.close();
     if (context.signal.aborted) return { status: "cancelled" };
-    const message = error instanceof Error ? error.message : String(error);
+    const message = said(error instanceof Error ? error.message : String(error));
     if (start.resume && /no conversation found/i.test(message)) {
       return { status: "failed", error: { code: "session-missing", message, retryable: true } };
     }

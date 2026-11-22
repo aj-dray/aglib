@@ -167,6 +167,18 @@ test("input arriving at turn priority reaches the running turn after a tool resu
   expect(log.filter((entry) => entry.type === "run.started").map((entry) => (entry as { input: unknown }).input)).toEqual(["balance?", "Correction: use savings"]);
 });
 
+test("a refused request, reported as a result flagged as an error, fails the run with its reason", async () => {
+  const store = createSqliteStore({ database: new Database(":memory:") });
+  const query = ((input: { prompt: AsyncIterable<SDKUserMessage> }) => (async function* () {
+    for await (const message of input.prompt) {
+      yield { type: "result", subtype: "success", is_error: true, result: "Failed to authenticate. API Error: 401 OAuth access token is invalid.", session_id: "s1", user_message_uuid: message.uuid, usage: {} } as unknown as SDKMessage;
+    }
+  })()) as unknown as ClaudeAgentSdkHarnessOptions["query"];
+  const result = await runAgent({ agent: agent(query), store, sessionId: "s", input: "hi" }).result;
+  expect(result.status).toBe("failed");
+  if (result.status === "failed") expect(result.error.message).toContain("401 OAuth access token is invalid");
+});
+
 test("a vendor failure fails the run with what it said", async () => {
   const store = createSqliteStore({ database: new Database(":memory:") });
   const result = await runAgent({ agent: agent(fakeQuery(() => [{ fail: "OAuth token has expired" }])), store, sessionId: "s", input: "hi" }).result;

@@ -35,6 +35,8 @@ export interface CodexConnection {
   send(message: JsonValue): void;
   readonly messages: AsyncIterable<JsonValue>;
   close(): void;
+  /** The last of what the process wrote to stderr, said when it exits: the reason is there. */
+  stderr?(): string;
 }
 
 const provider = "codex-app-server";
@@ -282,6 +284,8 @@ function open(process_: CodexProcess) {
     }
     if (closed) return;
     closed = true;
+    const said = connection.stderr?.().trim();
+    if (said) reason = `${reason}: ${said}`;
     for (const reply of pending.values()) reply(err({ code: "provider", message: `Codex exited: ${reason}`, retryable: true }));
     pending.clear();
     for (const close of closers) close(reason);
@@ -303,9 +307,12 @@ function open(process_: CodexProcess) {
 }
 
 function spawnConnection(argv: readonly string[], env: Readonly<Record<string, string>>): CodexConnection {
-  const child = spawn(argv[0]!, argv.slice(1), { env: { ...env }, stdio: ["pipe", "pipe", "ignore"] });
+  const child = spawn(argv[0]!, argv.slice(1), { env: { ...env }, stdio: ["pipe", "pipe", "pipe"] });
   const spawned = new Promise<void>((resolve, reject) => { child.once("spawn", resolve); child.once("error", reject); });
+  let stderr = "";
+  child.stderr.on("data", (chunk) => { stderr = `${stderr}${String(chunk)}`.slice(-2_000); });
   return {
+    stderr: () => stderr,
     send(message) { if (child.stdin.writable) child.stdin.write(`${JSON.stringify(message)}\n`); },
     messages: (async function* () {
       await spawned;
