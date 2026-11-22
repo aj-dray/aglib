@@ -11,7 +11,7 @@
  *
  * So the contract is executable. These cases say what the interface means —
  * that a claim does not consume, that a queue survives a lost race, that an
- * open activation renews by writing rather than by having started, that a
+ * open activation can renew without writing its cursor, that a
  * delivery id outlives the queue — and an adapter runs them rather than reading
  * them.
  *
@@ -398,6 +398,26 @@ export function defineStoreConformance(subject: StoreUnderTest): readonly Confor
 
     equals(got(await store.read({ sessionId: id("s") }), "read").pending.map((one: Delivery) => one.input), ["third"],
       "what arrived since is behind them and survives");
+  });
+
+  define("ownership renews without moving the cursor and fences a reclaimed position", async (store) => {
+    await created(store, id("s"));
+    got(await store.append({ sessionId: id("s"), expectedSeq: 0, entries: [], enqueue: [{ sessionId: id("s"), input: "work", id: "once" }] }), "deliver");
+    const first = await claim(store);
+    holds(first !== undefined, "first worker claims");
+    holds(typeof first!.claimId === "string" && first!.claimId.length > 0, "ownership is identified");
+    got(await store.renew({ sessionId: id("s"), claimId: first!.claimId }), "renew without a log write");
+    equals(got(await store.read({ sessionId: id("s") }), "read").seq, first!.seq, "renewal leaves the cursor alone");
+    await wait(LAPSE_MS);
+    const second = await claim(store);
+    holds(second !== undefined && second.claimId !== first!.claimId, "a replacement owns a distinct claim");
+    equals(second!.seq, first!.seq, "a reclaim need not change the position");
+    const staleRenew = await store.renew({ sessionId: id("s"), claimId: first!.claimId });
+    holds(!staleRenew.ok && staleRenew.error.code === "conflict", "a stale renewal is refused");
+    const staleWrite = await store.append({ sessionId: id("s"), expectedSeq: first!.seq, claimId: first!.claimId, entries: [said("stale")], takePending: 1 });
+    holds(!staleWrite.ok && staleWrite.error.code === "conflict", "a stale write is refused at the same sequence");
+    equals(got(await store.read({ sessionId: id("s") }), "read").pending.length, 1, "a refused writer cannot consume the queue");
+    got(await store.append({ sessionId: id("s"), expectedSeq: second!.seq, claimId: second!.claimId, entries: [said("current")], takePending: 1 }), "the current writer commits");
   });
 
   define("a session is claimed while it runs and released when the run finishes", async (store) => {

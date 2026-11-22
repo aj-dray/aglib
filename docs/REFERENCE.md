@@ -17,6 +17,14 @@ Every name a consumer can import, by entry point. What each one means belongs to
 
 `AcpAgent` · `AcpConfigOption` · `AcpHarnessOptions` · `AcpMcpServer` · `acpOptions` · `createAcpHarness`
 
+### `aglib/harness/adapters/claude-agent-sdk`
+
+`ClaudeAgentSdkHarnessOptions` · `createClaudeAgentSdkHarness`
+
+### `aglib/harness/adapters/codex`
+
+`codexAccount` · `CodexConnection` · `CodexHarnessOptions` · `CodexProcess` · `createCodexHarness` · `signInToCodex`
+
 ### `aglib/model`
 
 `Message` · `Model` · `ModelDelta` · `ModelError` · `ModelGeneration` · `ModelRequest` · `ModelResponse` · `ModelSteerResult` · `ProviderState` · `ToolSpec`

@@ -47,7 +47,7 @@ runnable programs that each answer one production question. An export needs a
 consumer: a recipe that composes it, or a conformance suite run against an
 implementation here. A surface with neither fails `bun run check`.
 
-## Three recipes
+## Four recipes
 
 One per answer to "who does the reasoning". Each is the smallest thing that
 still makes its point, and between them they exercise every seam.
@@ -57,6 +57,7 @@ still makes its point, and between them they exercise every seam.
 | [`native-agent`](recipes/native-agent/README.md) | ours | The whole surface in one program — memory, skills, subagents, a sandbox you choose — and the one thing only our own loop offers: a message reaching a busy session mid-turn. |
 | [`vendored-agent`](recipes/vendored-agent/README.md) | a vendor's, from its library | What a vendor library must expose for the log to stay the state. Pi's tools are values you re-point at your sandbox and its transcript is a field you assign, so an interrupted run continues — `recovery: "history"`. Its README says what the tiers below that get you. |
 | [`coding-agent`](recipes/coding-agent/README.md) | a vendor's, over a protocol | The cheapest containment on offer: any ACP agent started *inside* your sandbox, its work arriving as your entries, for one row of argv. |
+| [`subscription-agent`](recipes/subscription-agent/README.md) | a vendor's program, with only our tools | A Claude or ChatGPT plan spent by your own agent: Claude Code or Codex runs the loop with its built-ins off, and our instructions, tools, sandbox and log are everything else. |
 
 ## Where to read next
 

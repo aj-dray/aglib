@@ -94,7 +94,8 @@ runAgent({ agent, store, claim });                                              
 ```
 
 A claim is what `store.next()` or `store.interrupted()` handed back, passed whole. It carries the
-session, the position to write from, and the deliveries to consume, so none of them can be lined up
+session, the position to write from, the deliveries to consume and who owns it (`claimId`, renewed
+every `renewAfterMs` while the run lasts), so none of them can be lined up
 wrongly — which they were: `takePending` was only ever `claim.pending.length` and the position only
 ever `claim.seq`, and forgetting the first left the input queued for ever. A worker may add input of
 its own alongside a claim, and one thing ever does: orientation for a harness whose protocol has no

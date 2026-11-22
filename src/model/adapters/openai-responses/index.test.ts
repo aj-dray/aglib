@@ -198,6 +198,19 @@ test("a base64 file in a tool result rides the wire as a data URL", async () => 
   model.close();
 });
 
+test("a configured service tier rides every request", async () => {
+  const wire = new FakeConnection();
+  const model = createOpenAiResponsesModel({ apiKey: "k", model: "gpt-6-astra", serviceTier: "flex", connect: () => wire });
+  wire.onSend = (event) => {
+    if (event.type !== "response.create") return;
+    wire.message(created(laneOf(event), "resp_tier"));
+    wire.message(completed(laneOf(event), "resp_tier"));
+  };
+  expect((await drain(model.generate({ messages: [{ role: "user", content: "hi" }] }))).result.ok).toBe(true);
+  expect(wire.sent[0]).toMatchObject({ type: "response.create", service_tier: "flex" });
+  model.close();
+});
+
 test("output text keeps the phase of its response item", async () => {
   const wire = new FakeConnection();
   const model = createOpenAiResponsesModel({ apiKey: "k", model: "gpt-6-astra", connect: () => wire });

@@ -44,6 +44,15 @@ export interface SessionSummary {
 }
 
 export interface Runnable {
+  /**
+   * Who owns this claim, apart from where the log is. A position says nothing
+   * about ownership: a worker whose claim lapsed and was handed on can still
+   * hold the right `seq` if nothing was committed in between, and only this
+   * tells its writes from its successor's.
+   */
+  claimId: string;
+  /** How often a live owner renews, so a quiet run is not mistaken for a dead one. */
+  renewAfterMs: number;
   sessionId: string;
   seq: number;
   /**
@@ -88,10 +97,13 @@ export interface StoreChange {
  * tool call asked and never answered, and destroys the messages the loser took.
  * That is a real failure, observed, not a theoretical one.
  *
- * The claim is deliberately small: no renewal, no fencing token. It expires on
- * its own so a worker that dies does not strand a session, and if that worker
- * turns out to be alive its writes still fail the compare-and-swap. The claim
- * saves work; the compare-and-swap is what makes the work safe.
+ * A claim expires on its own so a worker that dies does not strand a session,
+ * and a live owner renews it while its model or a tool is quiet — a run that
+ * committed nothing for `claimMs` used to look dead and be handed on while it
+ * was still going, and a compare-and-swap cannot un-run a tool call. Renewal
+ * carries a fencing id, `claimId`, so a write from an owner that lost its claim
+ * fails even at the right sequence number. That cannot undo an external effect
+ * already admitted; it stops the next one.
  */
 export interface Store {
   create(input: {
@@ -112,6 +124,8 @@ export interface Store {
   append(input: {
     sessionId: string;
     expectedSeq: number;
+    /** A claimed writer names its claim as well as its position, and loses to a successor. */
+    claimId?: string;
     entries: readonly Entry[];
     enqueue?: readonly Delivery[];
     metadata?: JsonValue;
@@ -142,6 +156,9 @@ export interface Store {
    */
   list(input: { key?: string; limit?: number; before?: string }): Promise<Result<readonly SessionSummary[], StoreError>>;
 
+  /** Renew a live claim without writing to the log or moving its cursor. Refused once it lapsed or passed on. */
+  renew(input: { sessionId: string; claimId: string }): Promise<Result<void, StoreError>>;
+
   /**
    * Claim the next session that has input and is not already running.
    *
@@ -171,14 +188,9 @@ export interface Store {
    * at once, or left for whoever speaks to the session next. `pending` is empty
    * by construction — a session with input waiting is `next`'s.
    *
-   * Claimed on the same terms and with the same window. A run that commits
-   * nothing at all for longer than `claimMs` looks the same as one whose
-   * process died, here as in `next`. Two more consequences of that window,
-   * both accepted:
-   *
-   * An interrupted run is invisible until its claim lapses, so a killed
-   * worker's session waits out `claimMs` before anyone can pick it up. That is
-   * the price of having no heartbeat and no fencing token.
+   * Claimed on the same terms as `next`: a fencing id and the same window. An
+   * interrupted run is invisible until its claim lapses, so a killed worker's
+   * session waits out `claimMs` before anyone can pick it up; a live one renews.
    *
    * A store keeps one mark for "claimed" and "an activation is open", on
    * purpose — two fields could disagree, and the log is the only thing that

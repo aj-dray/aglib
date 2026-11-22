@@ -26,6 +26,7 @@ const tables = `
     pending       TEXT NOT NULL DEFAULT '[]',
     last_seq      INTEGER NOT NULL DEFAULT 0,
     running_since TEXT,
+    claim_id      TEXT,
     updated_at    TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS entries (
@@ -55,6 +56,7 @@ const tables = `
  */
 const added: readonly { table: string; column: string; type: string }[] = [
   { table: "sessions", column: "running_since", type: "TEXT" },
+  { table: "sessions", column: "claim_id", type: "TEXT" },
 ];
 
 const indexes = `
@@ -67,7 +69,7 @@ const indexes = `
 
 interface SessionRow {
   id: string; agent_id: string; agent_ver: string; key: string | null;
-  metadata: string; pending: string; last_seq: number; running_since: string | null; updated_at: string;
+  metadata: string; pending: string; last_seq: number; running_since: string | null; claim_id: string | null; updated_at: string;
 }
 
 /** `updatedAt` and the session id, so a page boundary is a point and not an instant. */
@@ -105,6 +107,10 @@ export function createSqliteStore(input: {
 }): Store {
   const database = input.database;
   const claimMs = input.claimMs ?? DEFAULT_CLAIM_MS;
+  /** A third of the window: two renewals can be missed before a live owner looks dead. */
+  const renewAfterMs = Math.max(1, Math.floor(claimMs / 3));
+  const owns = (row: SessionRow, claimId: string) =>
+    row.claim_id === claimId && !!row.running_since && Date.parse(row.running_since) + claimMs > Date.now();
   const deliveryMemoryMs = input.deliveryMemoryMs ?? DEFAULT_DELIVERY_MEMORY_MS;
 
   // Tables, then the columns an older build's tables lack, then the indexes —
@@ -198,7 +204,7 @@ export function createSqliteStore(input: {
      * the queue is consumed here rather than in `next`, a loser leaves the
      * messages it was carrying untouched.
      */
-    async append({ sessionId, expectedSeq, entries, enqueue, metadata, takePending }) {
+    async append({ sessionId, expectedSeq, claimId, entries, enqueue, metadata, takePending }) {
       const at = new Date().toISOString();
       try {
         // Inside the try: on a busy database this is where the failure lands,
@@ -206,6 +212,12 @@ export function createSqliteStore(input: {
         database.exec("BEGIN IMMEDIATE");
         const session = one<SessionRow>(`SELECT * FROM sessions WHERE id = ?`, [sessionId]);
         if (!session) { database.exec("ROLLBACK"); return err(notFound(sessionId)); }
+        // Ownership before position: a writer whose claim lapsed and passed on
+        // can still be at the right sequence, if nothing committed in between.
+        if (claimId !== undefined && !owns(session, claimId)) {
+          database.exec("ROLLBACK");
+          return err({ code: "conflict", message: "Session ownership expired or changed", retryable: false });
+        }
         if (session.last_seq !== expectedSeq) {
           database.exec("ROLLBACK");
           return err<StoreConflict>({
@@ -222,8 +234,6 @@ export function createSqliteStore(input: {
         // ends it. `next` reads this to keep a second one from beginning, and
         // the log is the only thing that knows — so it is derived from the log
         // rather than asserted by a caller.
-        const opens = entries.some((entry) => entry.type === "run.started");
-        const closes = entries.some((entry) => entry.type === "run.finished");
         // Only a write that records work renews the claim. Renewing on any
         // append at all meant a message *to* a session renewed the claim of the
         // worker that was supposed to read it — so a dead worker's session
@@ -237,7 +247,11 @@ export function createSqliteStore(input: {
         // longer than the claim window was handed to a second worker while it
         // was still going — and a compare-and-swap cannot un-run a tool call.
         // A worker that dies still releases, because a dead worker stops writing.
-        const runningSince = closes ? null : (opens || (worked && session.running_since)) ? at : session.running_since;
+        // The last lifecycle entry decides, so one write that closes an
+        // interrupted run and opens its successor leaves the session open.
+        const lifecycle = entries.findLast((entry) => entry.type === "run.started" || entry.type === "run.finished");
+        const runningSince = lifecycle?.type === "run.finished" ? null
+          : lifecycle?.type === "run.started" || (worked && session.running_since) ? at : session.running_since;
 
         const merged = metadata
           ? JSON.stringify({ ...(JSON.parse(session.metadata) as object), ...(metadata as object) })
@@ -299,6 +313,7 @@ export function createSqliteStore(input: {
             [JSON.stringify([...queueOf(target), delivery]), at, delivery.sessionId]);
           delivered.add(delivery.sessionId);
         }
+        if (!runningSince) run(`UPDATE sessions SET claim_id = NULL WHERE id = ?`, [sessionId]);
         database.exec("COMMIT");
         // After the commit, never before: a watcher that looked on an earlier
         // wake would find nothing and never be told again.
@@ -336,6 +351,23 @@ export function createSqliteStore(input: {
       } catch (error) { return err(failed(error)); }
     },
 
+    async renew({ sessionId, claimId }) {
+      try {
+        database.exec("BEGIN IMMEDIATE");
+        const row = one<SessionRow>(`SELECT * FROM sessions WHERE id = ?`, [sessionId]);
+        if (!row || !owns(row, claimId)) {
+          database.exec("ROLLBACK");
+          return err({ code: "conflict", message: "Session ownership expired or changed", retryable: false });
+        }
+        run(`UPDATE sessions SET running_since = ? WHERE id = ?`, [new Date().toISOString(), sessionId]);
+        database.exec("COMMIT");
+        return ok(undefined);
+      } catch (error) {
+        database.exec("ROLLBACK");
+        return err(failed(error));
+      }
+    },
+
     /**
      * Claim a session that has input and no activation already running.
      *
@@ -356,9 +388,11 @@ export function createSqliteStore(input: {
             WHERE pending <> '[]' AND (running_since IS NULL OR running_since < ?)
             ORDER BY updated_at LIMIT 1`, [stale]);
         if (!row) { database.exec("COMMIT"); return ok(undefined); }
-        run(`UPDATE sessions SET running_since = ? WHERE id = ?`, [new Date(now).toISOString(), row.id]);
+        const claimId = crypto.randomUUID();
+        run(`UPDATE sessions SET running_since = ?, claim_id = ? WHERE id = ?`, [new Date(now).toISOString(), claimId, row.id]);
         database.exec("COMMIT");
         return ok<Runnable>({
+          claimId, renewAfterMs,
           sessionId: row.id,
           seq: row.last_seq,
           pending: queueOf(row),
@@ -391,9 +425,11 @@ export function createSqliteStore(input: {
             WHERE pending = '[]' AND running_since IS NOT NULL AND running_since < ?
             ORDER BY updated_at LIMIT 1`, [stale]);
         if (!row) { database.exec("COMMIT"); return ok(undefined); }
-        run(`UPDATE sessions SET running_since = ? WHERE id = ?`, [new Date(now).toISOString(), row.id]);
+        const claimId = crypto.randomUUID();
+        run(`UPDATE sessions SET running_since = ?, claim_id = ? WHERE id = ?`, [new Date(now).toISOString(), claimId, row.id]);
         database.exec("COMMIT");
         return ok<Runnable>({
+          claimId, renewAfterMs,
           sessionId: row.id,
           seq: row.last_seq,
           pending: [],

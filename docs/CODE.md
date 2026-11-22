@@ -108,7 +108,8 @@ only a container can say. So the gate runs the Docker cases wherever the daemon 
 already there — no account, no network — and the ones that cost money or need a credential wait for
 an explicit opt-in: `AGLIB_LIVE_MODEL=1` for the recipe cases that reach a provider,
 `AGLIB_LIVE_ACP=1` for the ones that start a vendor's agent over `npx`. A skip prints what would
-unlock it.
+unlock it. The subscription harnesses' binary cases need no credential — a local server stands in for
+the model API — only the binary, named by `CLAUDE_CODE_EXECUTABLE` or `CODEX_EXECUTABLE`.
 
 Compaction has an opt-in synthetic model eval: `bun scripts/eval-compaction.ts --model <OpenRouter ID> --output <new directory>`, with `OPENROUTER_API_KEY` in the environment. It compares unchanged history, summary-at-end ordering and chronological ordering using the same generated checkpoint, including a second fold. Add `--stress` to run two actual compaction-hook folds above a 553,200-token estimate instead, or `--posing` to compare the previous JSON-lines request with the current one on two synthetic shell sessions of about 65,000 tokens that end in the agent's narration, counting how often each produces a checkpoint rather than the task's next step. Neither mode executes tools. Requests, outcomes, checks and reported costs are saved under the output directory; the comparison is a small diagnostic, not a model ranking or proof of exhaustive retention. These paid calls are separate from the gate.
 

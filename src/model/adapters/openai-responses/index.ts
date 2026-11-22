@@ -31,6 +31,8 @@ export interface OpenAiResponsesConnection {
 export interface OpenAiResponsesOptions {
   apiKey: string;
   model: string;
+  /** OpenAI's processing tier for this model's requests; absent leaves it to the project's default. */
+  serviceTier?: "auto" | "default" | "flex" | "fast" | "priority" | "ultrafast";
   baseURL?: string;
   headers?: Readonly<Record<string, string>>;
   /** Declare function tools with OpenAI's asynchronous execution extension. */
@@ -268,7 +270,7 @@ export function createOpenAiResponsesModel(options: OpenAiResponsesOptions): Ope
     id: `${provider}:${options.model}`,
     ...(options.asyncTools ? { asyncTools: true as const } : {}),
     generate(request: ModelRequest): ModelGeneration {
-      return generation(lane, options.model, request, options.steering === true);
+      return generation(lane, options.model, request, options.steering === true, options.serviceTier);
     },
     close() {
       for (const openHub of [...hubs]) openHub.close();
@@ -282,6 +284,7 @@ function generation(
   configuredModel: string,
   request: ModelRequest,
   steering: boolean,
+  serviceTier: OpenAiResponsesOptions["serviceTier"],
 ): ModelGeneration {
   let connection: ResponsesLane | undefined;
   let activeResponseId: string | undefined;
@@ -323,7 +326,7 @@ function generation(
     let terminal = false;
 
     try {
-      connection.send(encodeRequest(configuredModel, request));
+      connection.send(encodeRequest(configuredModel, request, serviceTier));
 
       for await (const envelope of connection) {
         if (envelope.type === "error") {
@@ -580,10 +583,11 @@ function rejectSteers(steers: readonly Steer[], error: ModelError): void {
   for (const steer of steers) steer.reject(error);
 }
 
-function encodeRequest(model: string, request: ModelRequest): ResponsesClientEvent {
+function encodeRequest(model: string, request: ModelRequest, serviceTier?: OpenAiResponsesOptions["serviceTier"]): ResponsesClientEvent {
   return {
     type: "response.create",
     model,
+    ...(serviceTier ? { service_tier: serviceTier } : {}),
     store: false,
     include: ["reasoning.encrypted_content"],
     input: encodeMessages(request.messages),
