@@ -19,6 +19,13 @@ export interface CodexProcess {
   env: Readonly<Record<string, string>>;
   /** Further `-c key=value` overrides, the value in TOML. */
   config?: Readonly<Record<string, string>>;
+  /**
+   * Leave Codex's apps on: the connectors on the signed-in ChatGPT account,
+   * beside our tools. A connector call runs in OpenAI's cloud, not through our
+   * executor, and is recorded as a note. Every other tool of Codex's own stays
+   * off, and still fails the turn if one appears.
+   */
+  connectors?: boolean;
   /** Injectable for tests; the default spawns `command`. */
   connect?: (argv: readonly string[], env: Readonly<Record<string, string>>) => CodexConnection;
 }
@@ -59,6 +66,8 @@ const settings: Readonly<Record<string, string>> = {
   "skills.include_instructions": "false",
   "tools.experimental_request_user_input.enabled": "false",
 };
+/** The MCP server Codex serves an account's ChatGPT connectors from. */
+const appsServer = "codex_apps";
 /** Thread items that mean Codex did something itself. */
 const ownItems = new Set(["commandExecution", "fileChange", "mcpToolCall", "collabAgentToolCall", "subAgentActivity", "webSearch", "imageView", "imageGeneration"]);
 
@@ -127,9 +136,10 @@ async function runTurn(options: CodexHarnessOptions, context: HarnessContext, st
 
   rpc.onNotify("item/agentMessage/delta", (params) => context.emit({ type: "text.delta", text: String(field(params, "delta") ?? ""), runId: context.runId }));
   rpc.onNotify("item/reasoning/textDelta", (params) => context.emit({ type: "reasoning.delta", text: String(field(params, "delta") ?? ""), runId: context.runId }));
+  const connector = (item: JsonValue | undefined) => options.connectors === true && field(item, "type") === "mcpToolCall" && field(item, "server") === appsServer;
   rpc.onNotify("item/started", (params) => {
     const type = String(field(field(params, "item"), "type") ?? "");
-    if (ownItems.has(type)) {
+    if (ownItems.has(type) && !connector(field(params, "item"))) {
       void rpc.request("turn/interrupt", { threadId, turnId: String(field(params, "turnId") ?? turnId ?? "") });
       fail("unsupported", `Codex started a ${type} of its own, which this harness does not allow. Its built-in tools are disabled by name; this Codex has one the list does not know.`);
     }
@@ -137,6 +147,12 @@ async function runTurn(options: CodexHarnessOptions, context: HarnessContext, st
   rpc.onNotify("item/completed", (params) => {
     const item = field(params, "item");
     if (field(item, "type") === "agentMessage") runner.say(String(field(item, "text") ?? ""));
+    if (connector(item)) {
+      const failure = field(field(item, "error"), "message");
+      const content = field(field(item, "result"), "content");
+      const text = Array.isArray(content) ? content.map((part) => field(part, "type") === "text" ? String(field(part, "text") ?? "") : `[${String(field(part, "type") ?? "part")}]`).join("\n") : "";
+      void runner.note({ name: `${appsServer}.${String(field(item, "tool") ?? "")}`, arguments: field(item, "arguments") ?? {}, result: typeof failure === "string" ? failure : text, ...(typeof failure === "string" ? { isError: true } : {}) });
+    }
   });
   let baseline: Counts | undefined;
   rpc.onNotify("thread/tokenUsage/updated", (params) => {
@@ -249,7 +265,7 @@ const initialize = async (rpc: ReturnType<typeof open>) => {
 /** A JSON-RPC client over one connection, answering the server's requests from handlers. */
 function open(process_: CodexProcess) {
   const argv = [...(process_.command ?? ["codex", "app-server"])];
-  for (const feature of disabled) argv.push("--disable", feature);
+  for (const feature of disabled) if (!(process_.connectors && feature === "apps")) argv.push("--disable", feature);
   for (const [key, value] of Object.entries({ ...settings, ...process_.config })) argv.push("-c", `${key}=${value}`);
   const connection = (process_.connect ?? spawnConnection)(argv, process_.env);
   const pending = new Map<number, (result: Result<JsonValue, Failure>) => void>();

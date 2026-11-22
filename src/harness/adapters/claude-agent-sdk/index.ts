@@ -23,6 +23,14 @@ export interface ClaudeAgentSdkHarnessOptions {
   cwd: string;
   /** The `claude` binary, when the SDK's bundled one is not the one to run. */
   executable?: string;
+  /**
+   * Let the model use the connectors on the signed-in Claude account — Slack,
+   * Notion, whatever the account has connected — beside our tools. Off, they
+   * are not even fetched. On, a connector call runs in Anthropic's cloud, not
+   * through our executor, and is recorded as a note; nothing else of Claude
+   * Code's is allowed either way.
+   */
+  connectors?: boolean;
   /** Injectable for tests; the default is the SDK's own. */
   query?: typeof sdkQuery;
 }
@@ -76,6 +84,7 @@ async function runTurn(options: ClaudeAgentSdkHarnessOptions, context: HarnessCo
   const startedAt = new Date().toISOString();
   const inputs = createInputs();
   const waiting = new Map<string, string[]>();
+  const connectorCalls = new Map<string, { name: string; input: unknown }>();
   const outstanding = new Set<string>();
   let session = start.resume ?? "";
   let served: string | undefined;
@@ -120,7 +129,16 @@ async function runTurn(options: ClaudeAgentSdkHarnessOptions, context: HarnessCo
         tools: [],
         mcpServers: { [server]: createSdkMcpServer({ name: server, version: "1", alwaysLoad: true, tools }) },
         allowedTools: tools.map((tool) => `mcp__${server}__${tool.name}`),
-        permissionMode: "dontAsk",
+        ...(options.connectors
+          ? {
+            // Asked per call, so a connector — and only a connector — is allowed.
+            permissionMode: "default" as const,
+            canUseTool: async (name: string, _input: Record<string, unknown>, about: { mcpServer?: { name: string; source: string } }) =>
+              about.mcpServer?.source === "claudeai" || name.startsWith(`mcp__${server}__`)
+                ? { behavior: "allow" as const }
+                : { behavior: "deny" as const, message: `${name} is not available here.` },
+          }
+          : { permissionMode: "dontAsk" as const, settings: { disableClaudeAiConnectors: true } }),
         settingSources: [],
         includePartialMessages: true,
         persistSession: true,
@@ -142,7 +160,17 @@ async function runTurn(options: ClaudeAgentSdkHarnessOptions, context: HarnessCo
           if (block.type === "tool_use" && block.name.startsWith(`mcp__${server}__`)) {
             const name = block.name.slice(`mcp__${server}__`.length);
             waiting.set(name, [...(waiting.get(name) ?? []), block.id]);
-          }
+          } else if (block.type === "tool_use") connectorCalls.set(block.id, { name: block.name, input: block.input });
+        }
+        continue;
+      }
+      // A connector's result comes back as the vendor's own tool result; ours were committed as they ran.
+      if (message.type === "user" && message.parent_tool_use_id === null && Array.isArray(message.message.content)) {
+        for (const block of message.message.content as { type?: string; tool_use_id?: string; content?: unknown; is_error?: boolean }[]) {
+          const call = block.type === "tool_result" && block.tool_use_id ? connectorCalls.get(block.tool_use_id) : undefined;
+          if (!call) continue;
+          connectorCalls.delete(block.tool_use_id!);
+          await runner.note({ name: call.name, arguments: call.input, result: resultText(block.content), ...(block.is_error ? { isError: true } : {}) });
         }
         continue;
       }
@@ -179,6 +207,12 @@ async function runTurn(options: ClaudeAgentSdkHarnessOptions, context: HarnessCo
     id: crypto.randomUUID(), startedAt, ...(served ? { model: served } : {}),
   });
   return { status: "completed", output };
+}
+
+function resultText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.map((part: { type?: string; text?: string }) => part.type === "text" ? part.text ?? "" : `[${part.type ?? "part"}]`).join("\n");
 }
 
 function emitDelta(context: HarnessContext, event: unknown): void {

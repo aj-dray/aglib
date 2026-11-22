@@ -338,7 +338,7 @@ holds the conversation**.
 | | our loop | Pi, from its library | Claude Code or Codex, our tools | anything, over ACP |
 | --- | --- | --- | --- | --- |
 | System prompt | ours | ours | ours | **none** — orientation leads the first message |
-| Its own tools | none to have | **values we can import**, re-pointed at our sandbox | **switched off** | **cannot be removed**, only refused |
+| Its own tools | none to have | **values we can import**, re-pointed at our sandbox | **switched off**; the account's connectors only if asked for, recorded as notes | **cannot be removed**, only refused |
 | Our tools | the executor | the same executor | the same executor, offered as MCP tools or dynamic tools | an MCP server it connects to |
 | Transcript | the log | **assignable** — `state.messages` from the log | its own | its own |
 | Continues a conversation by | reading the log | reading the log | its session, named on the log; a transcript when that is stale | `session/load`, its session id |

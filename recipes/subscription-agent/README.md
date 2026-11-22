@@ -10,6 +10,7 @@ CLAUDE_CODE_OAUTH_TOKEN=… bun run recipe subscription-agent --vendor claude --
 
 bun run recipe subscription-agent --vendor codex --sign-in      # once: a device code to enter at OpenAI
 bun run recipe subscription-agent --vendor codex --model gpt-6 "what is in this directory?"
+bun run recipe subscription-agent --vendor claude --connectors "what did #launch decide this week?"
 ```
 
 **What this shows.** Where a plan can be spent, and what spending it costs an agent
@@ -44,6 +45,7 @@ Read them yourself; they move. As of this writing:
 | Instructions | **ours**, as the whole system prompt (Claude Code) or the thread's base instructions (Codex) |
 | Tools | **ours only**. Claude Code's built-ins are switched off (`tools: []`) and ours are served in-process over MCP; Codex's are disabled by feature name and ours are declared as dynamic tools Codex calls back for. A Codex item that is not one of our calls fails the turn, so a built-in that a later Codex adds cannot run quietly |
 | Where tools run | **ours** — the executor, the sandbox, `decide`, the log |
+| The account's connectors | **off unless asked for** (`--connectors`). On, the model may also use the connectors the signed-in Claude or ChatGPT account has — Slack, Notion — which run in the vendor's cloud rather than through our executor; each call is recorded as a note, not a tool call, so a model that takes the session over can read it without needing the tool. Off, Claude Code does not even fetch them, and Codex's apps stay disabled |
 | The vendor process's environment | **built, not inherited**: its credential and its state directory, nothing else the host holds |
 | Context | **theirs**. Compaction is theirs too |
 | Continuing a conversation | the vendor's session, named on the log's last assistant entry. If another model has spoken since, or the vendor has lost the session, a new one opens with the conversation so far as a transcript |

@@ -16,7 +16,7 @@ import { createClaudeAgentSdkHarness, type ClaudeAgentSdkHarnessOptions } from "
  * transport, so a schema the SDK could not convert fails here too — and
  * answers each turn from `script`.
  */
-type Step = { say?: string; call?: { name: string; args: unknown }; fail?: string };
+type Step = { say?: string; call?: { name: string; args: unknown }; connector?: { name: string; args: unknown; result: string }; fail?: string };
 function fakeQuery(script: (turn: number, prompts: unknown[]) => Step[], seen: { options?: Record<string, unknown>; prompts: unknown[] } = { prompts: [] }) {
   return ((input: { prompt: AsyncIterable<SDKUserMessage>; options: Record<string, unknown> }) => {
     seen.options = input.options;
@@ -34,6 +34,11 @@ function fakeQuery(script: (turn: number, prompts: unknown[]) => Step[], seen: {
             return;
           }
           if (step.say) yield { type: "assistant", parent_tool_use_id: null, session_id: session, message: { model: "claude-test", content: [{ type: "text", text: step.say }] } } as unknown as SDKMessage;
+          if (step.connector) {
+            const id = `toolu_${turn}_connector`;
+            yield { type: "assistant", parent_tool_use_id: null, session_id: session, message: { model: "claude-test", content: [{ type: "tool_use", id, name: step.connector.name, input: step.connector.args }] } } as unknown as SDKMessage;
+            yield { type: "user", parent_tool_use_id: null, session_id: session, message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: [{ type: "text", text: step.connector.result }] }] } } as unknown as SDKMessage;
+          }
           if (step.call) {
             const id = `toolu_${turn}_${step.call.name}`;
             yield { type: "assistant", parent_tool_use_id: null, session_id: session, message: { model: "claude-test", content: [{ type: "tool_use", id, name: `mcp__tools__${step.call.name}`, input: step.call.args }] } } as unknown as SDKMessage;
@@ -70,9 +75,9 @@ const ledger = defineTool({
   execute: (args) => ({ content: `${args.account}: 1250` }),
 });
 
-const agent = (query: ClaudeAgentSdkHarnessOptions["query"]): Agent => ({
+const agent = (query: ClaudeAgentSdkHarnessOptions["query"], connectors?: boolean): Agent => ({
   id: "a", version: "1", instructions: "Answer from the ledger.", tools: [ledger],
-  harness: createClaudeAgentSdkHarness({ model: "opus", env: { PATH: "/bin" }, cwd: "/", ...(query ? { query } : {}) }),
+  harness: createClaudeAgentSdkHarness({ model: "opus", env: { PATH: "/bin" }, cwd: "/", ...(query ? { query } : {}), ...(connectors ? { connectors } : {}) }),
 });
 
 async function entries(store: Store, sessionId = "s") {
@@ -94,6 +99,9 @@ test("our tools run through the executor and the log, and the session is recorde
   expect(seen.options?.["allowedTools"]).toEqual(["mcp__tools__read_ledger"]);
   expect(seen.options?.["systemPrompt"]).toEqual(["Answer from the ledger."]);
   expect(seen.options?.["settingSources"]).toEqual([]);
+  // The account's connectors are not even fetched unless asked for.
+  expect(seen.options?.["settings"]).toEqual({ disableClaudeAiConnectors: true });
+  expect(seen.options?.["permissionMode"]).toBe("dontAsk");
 
   const log = await entries(store);
   expect(log.map((entry) => entry.type)).toEqual(["run.started", "assistant", "tool.started", "tool.finished", "assistant", "run.finished"]);
@@ -192,7 +200,7 @@ test("a vendor failure fails the run with what it said", async () => {
  * Opt-in, because it needs the platform binary the SDK ships separately.
  */
 const executable = process.env["CLAUDE_CODE_EXECUTABLE"];
-test.skipIf(!executable)("the binary offers the model our tools and nothing else, and runs a call through the log", async () => {
+test.skipIf(!executable).each([false, true])("the binary offers the model our tools and nothing else, and runs a call through the log (connectors %p)", async (connectors) => {
   const requests: { system?: unknown; tools?: { name: string }[]; messages: unknown[] }[] = [];
   const server = Bun.serve({ port: 0, async fetch(request) {
     if (!new URL(request.url).pathname.endsWith("/messages")) return Response.json({});
@@ -210,7 +218,7 @@ test.skipIf(!executable)("the binary offers the model our tools and nothing else
   try {
     const store = createSqliteStore({ database: new Database(":memory:") });
     const harness = createClaudeAgentSdkHarness({
-      model: "claude-opus-5-5", cwd: home, executable: executable!,
+      model: "claude-opus-5-5", cwd: home, executable: executable!, connectors,
       env: { PATH: process.env["PATH"] ?? "", HOME: home, CLAUDE_CONFIG_DIR: `${home}/config`, ANTHROPIC_API_KEY: "sk-test", ANTHROPIC_BASE_URL: `http://127.0.0.1:${server.port}`, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" },
     });
     const result = await runAgent({ agent: { id: "a", version: "1", instructions: "Answer from the ledger.", tools: [ledger], harness }, store, sessionId: "s", input: "balance?" }).result;
@@ -232,3 +240,27 @@ test.skipIf(!executable)("the binary offers the model our tools and nothing else
     await import("node:fs/promises").then((fs) => fs.rm(home, { recursive: true, force: true }));
   }
 }, 120_000);
+
+test("with connectors on, an account connector is allowed and recorded as a note, and nothing else of Claude Code's is", async () => {
+  const store = createSqliteStore({ database: new Database(":memory:") });
+  const seen = { prompts: [] as unknown[] } as { options?: Record<string, unknown>; prompts: unknown[] };
+  const query = fakeQuery(() => [
+    { say: "Searching Slack.", connector: { name: "mcp__claude_ai_Slack__slack_search", args: { query: "launch" }, result: "3 messages in #launch" } },
+    { call: { name: "read_ledger", args: { account: "ops" } } },
+    { say: "Found it." },
+  ], seen);
+  const result = await runAgent({ agent: agent(query, true), store, sessionId: "s", input: "what happened with the launch?" }).result;
+  expect(result.status).toBe("completed");
+
+  expect(seen.options?.["settings"]).toBeUndefined();
+  const decide = seen.options?.["canUseTool"] as (name: string, input: object, about: object) => Promise<{ behavior: string }>;
+  expect((await decide("mcp__claude_ai_Slack__slack_search", {}, { mcpServer: { name: "claude_ai_Slack", source: "claudeai" } })).behavior).toBe("allow");
+  expect((await decide("mcp__elsewhere__run", {}, { mcpServer: { name: "elsewhere", source: "user" } })).behavior).toBe("deny");
+  expect((await decide("Bash", {}, {})).behavior).toBe("deny");
+
+  const log = await entries(store);
+  expect(log.map((entry) => entry.type)).toEqual(["run.started", "assistant", "assistant", "tool.started", "tool.finished", "assistant", "run.finished"]);
+  // A note, not a call: a model that takes the session over has no such tool.
+  expect(log[1]).toMatchObject({ content: 'Searching Slack.\n\n[connector mcp__claude_ai_Slack__slack_search] {"query":"launch"}\n→ 3 messages in #launch' });
+  expect((log[1] as { calls?: unknown }).calls).toBeUndefined();
+});

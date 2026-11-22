@@ -22,7 +22,7 @@ import { z } from "zod";
 import { recipeMarker } from "../manifest.ts";
 
 export type Vendor = "claude" | "codex";
-export interface Choice { vendor: Vendor; model: string; effort?: "low" | "medium" | "high" | "xhigh" | "max" }
+export interface Choice { vendor: Vendor; model: string; effort?: "low" | "medium" | "high" | "xhigh" | "max"; connectors?: boolean }
 
 /** Where each vendor keeps its sign-in and its sessions: under this recipe's own home, never the user's. */
 export const home = process.env["AGLIB_SUBSCRIPTION_HOME"] ?? join(homedir(), ".aglib-subscription-agent");
@@ -55,8 +55,8 @@ export const shell = (sandbox: Sandbox): Tool => defineTool({
 export function harnessFor(choice: Choice, seams: { query?: ClaudeAgentSdkHarnessOptions["query"]; connect?: CodexHarnessOptions["connect"] } = {}): Harness {
   const cwd = join(home, "work");
   return choice.vendor === "claude"
-    ? createClaudeAgentSdkHarness({ model: choice.model, cwd, env: environment("claude"), ...(choice.effort ? { effort: choice.effort } : {}), ...(seams.query ? { query: seams.query } : {}) })
-    : createCodexHarness({ model: choice.model, cwd, env: environment("codex"), ...(choice.effort ? { effort: choice.effort } : {}), ...(seams.connect ? { connect: seams.connect } : {}) });
+    ? createClaudeAgentSdkHarness({ model: choice.model, cwd, env: environment("claude"), ...(choice.effort ? { effort: choice.effort } : {}), ...(choice.connectors ? { connectors: true } : {}), ...(seams.query ? { query: seams.query } : {}) })
+    : createCodexHarness({ model: choice.model, cwd, env: environment("codex"), ...(choice.effort ? { effort: choice.effort } : {}), ...(choice.connectors ? { connectors: true } : {}), ...(seams.connect ? { connect: seams.connect } : {}) });
 }
 
 export async function main(task: string, options: { choice: Choice; harness?: Harness; sessionId?: string; write?: (text: string) => void }): Promise<string> {
@@ -86,16 +86,17 @@ export async function main(task: string, options: { choice: Choice; harness?: Ha
 
 export function parseArguments(argv: readonly string[]): { choice: Choice; task: string; signIn: boolean } {
   const rest = [...argv];
-  let vendor: Vendor = "claude", model: string | undefined, effort: Choice["effort"], signIn = false;
+  let vendor: Vendor = "claude", model: string | undefined, effort: Choice["effort"], signIn = false, connectors = false;
   while (rest[0]?.startsWith("--")) {
     const flag = rest.shift()!;
     if (flag === "--vendor") { const value = rest.shift(); if (value !== "claude" && value !== "codex") throw new Error("--vendor is claude or codex"); vendor = value; }
     else if (flag === "--model") model = rest.shift();
     else if (flag === "--effort") effort = rest.shift() as Choice["effort"];
     else if (flag === "--sign-in") signIn = true;
+    else if (flag === "--connectors") connectors = true;
     else throw new Error(`Unknown flag ${flag}`);
   }
-  return { choice: { vendor, model: model ?? (vendor === "claude" ? "claude-sonnet-5-5" : "gpt-6"), ...(effort ? { effort } : {}) }, task: rest.join(" "), signIn };
+  return { choice: { vendor, model: model ?? (vendor === "claude" ? "claude-sonnet-5-5" : "gpt-6"), ...(effort ? { effort } : {}), ...(connectors ? { connectors } : {}) }, task: rest.join(" "), signIn };
 }
 
 if (import.meta.main) {
