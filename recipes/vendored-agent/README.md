@@ -73,6 +73,12 @@ layer whose only customer it was. `coding-agent` still covers the
 what-you-give-up end of the argument, over a protocol, for any agent at all —
 including Claude Code, which has an ACP row there.
 
+It is back in this repository, in `recipes/subscription-agent`, for a reason
+none of the above touches. That recipe uses none of its tools — they are switched
+off — and wants none of its transcript; it wants the one thing only the vendor's
+program can do, which is spend a Claude subscription. The three costs above are
+real there too, and its README states them.
+
 ## What the harness no longer declares
 
 An earlier version of the `Harness` port carried `toolUse: "application" |

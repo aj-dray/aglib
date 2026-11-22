@@ -259,7 +259,7 @@ test("an explicitly empty reasoning-details block survives as provider state", a
   expect((sent[1]!["messages"] as Record<string, unknown>[])[0]!["reasoning_details"]).toEqual([]);
 });
 
-test("tool images reach the model after all parallel replies with their call association", async () => {
+test("tool images and files reach the model after all parallel replies with their call association", async () => {
   const { fetch, sent } = capturing();
   const model = createOpenRouterModel({ apiKey: "k", model: "acme/one", fetch });
   await collect(model.generate({ messages: [
@@ -273,6 +273,7 @@ test("tool images reach the model after all parallel replies with their call ass
     { role: "tool", callId: "mixed", content: [
       { type: "text", text: "second screenshot" },
       { type: "image", mediaType: "image/jpeg", source: { kind: "url", url: "https://example.test/screen.jpg" } },
+      { type: "file", mediaType: "application/pdf", name: "report.pdf", source: { kind: "inline", data: "JVBERg==" } },
     ] },
     { role: "assistant", content: "I can see both screens." },
   ] }));
@@ -281,10 +282,11 @@ test("tool images reach the model after all parallel replies with their call ass
     { role: "tool", tool_call_id: "image-only", content: "" },
     { role: "tool", tool_call_id: "mixed", content: "second screenshot" },
     { role: "user", content: [
-      { type: "text", text: "Images from tool call image-only:" },
+      { type: "text", text: "Attachments from tool call image-only:" },
       { type: "image_url", image_url: { url: "data:image/png;base64,cGl4ZWw=" } },
-      { type: "text", text: "Images from tool call mixed:" },
+      { type: "text", text: "Attachments from tool call mixed:" },
       { type: "image_url", image_url: { url: "https://example.test/screen.jpg" } },
+      { type: "file", file: { filename: "report.pdf", file_data: "data:application/pdf;base64,JVBERg==" } },
     ] },
     { role: "assistant", content: "I can see both screens." },
   ]);
@@ -295,7 +297,7 @@ test("tool images reach the model after all parallel replies with their call ass
     { role: "tool", callId: "last", content: [{ type: "image", mediaType: "image/png", source: { kind: "inline", data: "cGl4ZWw=" } }] },
   ] }));
   expect((lastSent[0]!.body["messages"] as Record<string, unknown>[]).at(-1)).toMatchObject({ role: "user", content: [
-    { type: "text", text: "Images from tool call last:" },
+    { type: "text", text: "Attachments from tool call last:" },
     { type: "image_url", image_url: { url: "data:image/png;base64,cGl4ZWw=" } },
   ] });
 });

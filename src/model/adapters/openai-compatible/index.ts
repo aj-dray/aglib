@@ -273,8 +273,8 @@ function encodeConversation(
     if (marked.has(index)) mark(encoded);
     out.push(encoded);
     if (message.role === "tool" && typeof message.content !== "string") {
-      const media = message.content.filter((part) => part.type === "image");
-      if (media.length) images.push({ type: "text", text: `Images from tool call ${message.callId}:` }, ...media);
+      const media = message.content.filter((part) => part.type === "image" || part.type === "file");
+      if (media.length) images.push({ type: "text", text: `Attachments from tool call ${message.callId}:` }, ...media);
     }
   });
   flush();
@@ -329,7 +329,11 @@ function encodeContent(content: Message["content"]): unknown {
       const url = part.source.kind === "url" ? part.source.url : `data:${part.mediaType};base64,${part.source.data}`;
       parts.push({ type: "image_url", image_url: { url } });
     }
-    // Files and opaque blocks have no place on this wire. Dropping them beats
+    if (part.type === "file") {
+      const file_data = part.source.kind === "url" ? part.source.url : `data:${part.mediaType};base64,${part.source.data}`;
+      parts.push({ type: "file", file: { filename: part.name ?? "attachment", file_data } });
+    }
+    // Opaque blocks have no place on this wire. Dropping them beats
     // stringifying them into something the model would read as prose.
   }
   const only = parts.length === 1 ? parts[0] : undefined;

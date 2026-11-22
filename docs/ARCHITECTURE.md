@@ -9,6 +9,7 @@ flowchart LR
   Harness[harness port]
   Native[adapters/native<br/>our loop]
   External[adapters/acp<br/>any protocol agent]
+  Vendor[adapters/claude-agent-sdk · codex<br/>a vendor's program, our tools]
   Model[model port]
   Store[store port]
   Sandbox[sandbox port]
@@ -18,6 +19,7 @@ flowchart LR
   Run --> Store
   Harness --> Native
   Harness --> External
+  Harness --> Vendor
   Native --> Model
   App --> Sandbox
   Sandbox --> Run
@@ -324,27 +326,27 @@ why `finish` takes it from the result and not from whatever happened to stream.
 
 One table, because this is the question every application asks and the answer is
 easy to get wrong by hoping. What varies is not how much of the agent you get —
-all three run inside one log, one sandbox and one permission decision — but **who
+all four run inside one log, one sandbox and one permission decision — but **who
 holds the conversation**.
 
-| | our loop | Pi, from its library | anything, over ACP |
-| --- | --- | --- | --- |
-| System prompt | ours | ours | **none** — orientation leads the first message |
-| Its own tools | none to have | **values we can import**, re-pointed at our sandbox | **cannot be removed**, only refused |
-| Our tools | the executor | the same executor | an MCP server it connects to |
-| Transcript | the log | **assignable** — `state.messages` from the log | its own |
-| Continues a conversation by | reading the log | reading the log | `session/load`, its session id |
-| `recovery` | `history` | `history` | `none` |
-| Resumable from our log after a crash | **yes** | **yes** | no |
-| Handed to a different harness mid-session | **yes** | **yes** | no |
+| | our loop | Pi, from its library | Claude Code or Codex, our tools | anything, over ACP |
+| --- | --- | --- | --- | --- |
+| System prompt | ours | ours | ours | **none** — orientation leads the first message |
+| Its own tools | none to have | **values we can import**, re-pointed at our sandbox | **switched off** | **cannot be removed**, only refused |
+| Our tools | the executor | the same executor | the same executor, offered as MCP tools or dynamic tools | an MCP server it connects to |
+| Transcript | the log | **assignable** — `state.messages` from the log | its own | its own |
+| Continues a conversation by | reading the log | reading the log | its session, named on the log; a transcript when that is stale | `session/load`, its session id |
+| `recovery` | `history` | `history` | `none` | `none` |
+| Resumable from our log after a crash | **yes** | **yes** | no | no |
+| Handed to a different harness mid-session | **yes** | **yes** | **to** one, yes; **from** one, by transcript | no |
 
-There is a tier between the last two columns, and it is worth knowing before
-choosing a vendor: an agent shipped as a **process SDK** rather than a library.
-Its tools are names you enable rather than values you take, so they run where it
-runs; its prompt is composable; its transcript is its own. `recipes/vendored-agent`
-carried one for a while and its README says what that measured. The column is not
-here because the route is not: what a table of routes may claim is what this
-repository can run.
+The third column is a **process SDK**: an agent shipped as a program you drive
+rather than a library you compose. It exists for a reason the others do not
+share — it is the only way to spend a Claude or ChatGPT subscription, which is
+sold for the vendor's program — and `recipes/subscription-agent` says what that
+trade costs. It commits every call the way our loop does, which is why a native
+model can take a session over from it; going the other way, the vendor gets the
+conversation as text, because it accepts no conversation it did not have.
 
 The last two rows are the same fact twice, and it is the fact worth choosing on.
 Where a vendor exposes its transcript as something we assign, our log is the
