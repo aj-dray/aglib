@@ -149,6 +149,24 @@ export function createToolRunner(context: HarnessContext) {
     say(text: string) { if (text) said = said ? `${said}\n\n${text}` : text; },
     /** Usage to carry on the next committed assistant entry. */
     spent(next: Usage) { usage = addUsage(usage, next); },
+    /**
+     * A call the vendor made through one of its own account connectors, which
+     * ran in the vendor's cloud rather than through our executor. It is
+     * recorded as a note — what was said before it, then the call and what it
+     * returned — not as a tool call, because a model that takes the session
+     * over has no such tool, and a provider may refuse a history that calls a
+     * tool the request does not declare.
+     */
+    note(call: { name: string; arguments: unknown; result: string; isError?: boolean }) {
+      const record = `[connector ${call.name}] ${JSON.stringify(call.arguments ?? {})}\n${call.isError ? "failed: " : "→ "}${call.result.length > RESULT_CHARS ? `${call.result.slice(0, RESULT_CHARS)}…` : call.result}`;
+      const next = tail.then(async () => {
+        const text = said;
+        said = "";
+        await context.commit([{ type: "assistant", runId: context.runId, content: text ? `${text}\n\n${record}` : record }]);
+      });
+      tail = next.catch(() => undefined);
+      return next;
+    },
     run(call: ToolCall): Promise<ToolResult> {
       const next = tail.then(() => runOne(call));
       tail = next.catch(() => undefined);

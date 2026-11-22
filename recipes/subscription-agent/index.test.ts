@@ -40,6 +40,7 @@ test("a Codex turn runs our bash through our sandbox and answers", async () => {
   };
   const written: string[] = [];
   const choice = parseArguments(["--vendor", "codex", "--model", "gpt-6", "say", "hello"]).choice;
+  expect(parseArguments(["--vendor", "codex", "--connectors", "go"]).choice.connectors).toBe(true);
   await main("say hello", { choice, harness: harnessFor(choice, { connect }), write: (text) => written.push(text) });
   expect(written.join("")).toContain("It says hello.");
   expect(sent).toContain("thread/start");

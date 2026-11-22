@@ -13,7 +13,7 @@ import type { Store } from "../../../store/store.js";
 import type { JsonValue } from "../../../json.js";
 import { codexAccount, createCodexHarness, signInToCodex, type CodexConnection, type CodexHarnessOptions } from "./index.js";
 
-type Step = { say?: string; call?: { tool: string; arguments: JsonValue }; item?: string; fail?: string };
+type Step = { say?: string; call?: { tool: string; arguments: JsonValue }; item?: string; connector?: { server: string; tool: string; result: string }; fail?: string };
 
 /**
  * An app server, scripted. It keeps threads across connections the way Codex
@@ -42,6 +42,11 @@ function fakeServer(script: (turn: number, input: JsonValue) => Step[]) {
         if (step.fail) { notify("turn/completed", { threadId, turn: { id: turnId, status: "failed", error: { message: step.fail } } }); return; }
         if (step.item) notify("item/started", { threadId, turnId, item: { type: step.item, id: "x" } });
         if (step.say) notify("item/completed", { threadId, turnId, item: { type: "agentMessage", id: "m", text: step.say } });
+        if (step.connector) {
+          const item = { type: "mcpToolCall", id: "m1", server: step.connector.server, tool: step.connector.tool, arguments: { query: "launch" } };
+          notify("item/started", { threadId, turnId, item: { ...item, status: "inProgress", result: null, error: null } });
+          notify("item/completed", { threadId, turnId, item: { ...item, status: "completed", result: { content: [{ type: "text", text: step.connector.result }], structuredContent: null, _meta: null }, error: null } });
+        }
         if (step.call) await ask("item/tool/call", { threadId, turnId, callId: `call_${turns}`, namespace: null, tool: step.call.tool, arguments: step.call.arguments });
         total += 10;
         notify("thread/tokenUsage/updated", { threadId, turnId, tokenUsage: { total: { inputTokens: 100 + total, cachedInputTokens: total / 2, cacheWriteInputTokens: 0, outputTokens: total / 2, reasoningOutputTokens: 0, totalTokens: 0 }, last: { inputTokens: 10, cachedInputTokens: 5, cacheWriteInputTokens: 0, outputTokens: 5, reasoningOutputTokens: 0, totalTokens: 0 }, modelContextWindow: null } });
@@ -84,9 +89,9 @@ const ledger = defineTool({
   execute: (args) => ({ content: `${args.account}: 1250` }),
 });
 
-const agent = (connect: CodexHarnessOptions["connect"], tools = [ledger]): Agent => ({
+const agent = (connect: CodexHarnessOptions["connect"], tools = [ledger], connectors?: boolean): Agent => ({
   id: "a", version: "1", instructions: "Answer from the ledger.", tools,
-  harness: createCodexHarness({ model: "gpt-6", cwd: "/", env: { PATH: "/bin" }, ...(connect ? { connect } : {}) }),
+  harness: createCodexHarness({ model: "gpt-6", cwd: "/", env: { PATH: "/bin" }, ...(connect ? { connect } : {}), ...(connectors ? { connectors } : {}) }),
 });
 
 async function entries(store: Store) {
@@ -108,7 +113,7 @@ test("our tools are the thread's whole tool list, and each call runs through the
   expect(started["sandbox"]).toBe("read-only");
   expect((started["dynamicTools"] as { name: string }[]).map((tool) => tool.name)).toEqual(["read_ledger"]);
   // Codex's own tools are switched off at the process, not left to a refusal.
-  expect(server.argv[0]).toEqual(expect.arrayContaining(["--disable", "shell_tool", "--disable", "unified_exec", "-c", 'web_search="disabled"']));
+  expect(server.argv[0]).toEqual(expect.arrayContaining(["--disable", "shell_tool", "--disable", "unified_exec", "--disable", "apps", "-c", 'web_search="disabled"']));
 
   const log = await entries(store);
   expect(log.map((entry) => entry.type)).toEqual(["run.started", "assistant", "tool.started", "tool.finished", "assistant", "run.finished"]);
@@ -169,6 +174,22 @@ test("a tool of Codex's own fails the turn rather than running on the host", asy
   expect(result.status).toBe("failed");
   if (result.status === "failed") expect(result.error.message).toContain("commandExecution");
   expect(server.sent.some((request) => request.method === "turn/interrupt")).toBe(true);
+});
+
+test("with connectors on, a ChatGPT connector is allowed and recorded as a note; any other MCP call still fails the turn", async () => {
+  const server = fakeServer(() => [{ say: "Searching Slack.", connector: { server: "codex_apps", tool: "slack_search", result: "3 messages in #launch" } }, { say: "Found it." }]);
+  const store = createSqliteStore({ database: new Database(":memory:") });
+  const result = await runAgent({ agent: agent(server.connect, [ledger], true), store, sessionId: "s", input: "what happened with the launch?" }).result;
+  expect(result.status).toBe("completed");
+  expect(server.argv[0]).not.toContain("apps");
+  expect(server.argv[0]).toEqual(expect.arrayContaining(["--disable", "shell_tool"]));
+  const log = await entries(store);
+  expect(log.map((entry) => entry.type)).toEqual(["run.started", "assistant", "assistant", "run.finished"]);
+  expect(log[1]).toMatchObject({ content: 'Searching Slack.\n\n[connector codex_apps.slack_search] {"query":"launch"}\n→ 3 messages in #launch' });
+
+  const other = fakeServer(() => [{ connector: { server: "someone_elses", tool: "run", result: "" } }]);
+  const refused = await runAgent({ agent: agent(other.connect, [ledger], true), store: createSqliteStore({ database: new Database(":memory:") }), sessionId: "s", input: "hi" }).result;
+  expect(refused.status).toBe("failed");
 });
 
 test("a failed turn fails the run with what Codex said", async () => {
